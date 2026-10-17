@@ -100,8 +100,13 @@ class MangaDetailsActivity : AppCompatActivity() {
                 else startActivity(ReaderActivity.intent(this, row.chapter.id))
             },
             onLong = { row, _ ->
-                if (row.chapter.id in selectedChapterIds) showChapterSelectionActions()
-                else toggleChapterSelection(row.chapter.id)
+                when {
+                    row.chapter.id in selectedChapterIds -> showChapterSelectionActions()
+                    chapterSelectionMode -> chapterSelectionAnchorId?.let {
+                        selectChapterRange(it, row.chapter.id)
+                    } ?: toggleChapterSelection(row.chapter.id)
+                    else -> toggleChapterSelection(row.chapter.id)
+                }
             },
             onDownload = { row -> onDownloadClick(row) }
         )

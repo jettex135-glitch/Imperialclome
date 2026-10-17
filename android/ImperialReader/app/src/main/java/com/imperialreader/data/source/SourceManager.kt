@@ -11,6 +11,7 @@ class SourceManager(private val context: Context) {
      */
     private val builtin: List<Source> = listOf(
         MangaDexSource(),
+        MangaKSource(),
         MangaKatanaSource(),
         MangaPillSource(),
         MangaBuddySource(),
@@ -45,7 +46,9 @@ class SourceManager(private val context: Context) {
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),
         // 18+ (hidden until enabled in Settings)
-        WordPressSource("ManhuaUS", "https://manhuaus.com", nsfw = true)
+        WordPressSource("ManhuaUS", "https://manhuaus.com", nsfw = true),
+        EHentaiSource(),
+        WordPressSource("IMHentai", "https://imhentai.xxx", nsfw = true)
     )
 
     private fun custom(): List<Source> =

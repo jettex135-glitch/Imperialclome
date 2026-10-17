@@ -1,5 +1,6 @@
 package com.imperialreader.data.source
 
+import android.net.Uri
 import com.imperialreader.data.network.await
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -16,6 +17,256 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.IOException
 import java.net.URI
+
+/** MangaK's public API returns full title metadata, chapter indexes, and reader image URLs. */
+class MangaKSource : HttpSource() {
+    override val id = "mangak_io"
+    override val name = "MangaK.io"
+    override val lang = "en"
+    override val baseUrl = "https://mangak.io"
+
+    private val apiBase = "https://api.mangak.io"
+
+    override suspend fun getPopular(page: Int): MangasPage = list("sort=views", page)
+
+    override suspend fun getLatest(page: Int): MangasPage = list("sort=latest", page)
+
+    override suspend fun search(query: String, page: Int): MangasPage {
+        if (query.isBlank()) return getPopular(page)
+        val genre = query.trim().lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), "-").trim('-')
+        val responses = coroutineScope {
+            listOf(
+                async { list("q=${enc(query.trim())}", page) },
+                async { list("genres=${enc(genre)}", page) },
+                async { list("author=${enc(query.trim())}", page) }
+            ).awaitAll()
+        }
+        return MangasPage(
+            responses.flatMap { it.mangas }.distinctBy { it.url },
+            responses.any { it.hasNextPage }
+        )
+    }
+
+    override suspend fun searchMetadata(query: String, page: Int) = MangasPage(emptyList(), false)
+
+    private suspend fun list(filters: String, page: Int): MangasPage {
+        val separator = if (filters.isBlank()) "" else "$filters&"
+        val json = api("/titles/search?${separator}page=${page.coerceAtLeast(1)}&limit=24")
+        val data = json.optJSONObject("data") ?: throw IOException("MangaK returned no search data")
+        val items = data.optJSONArray("items") ?: JSONArray()
+        val mangas = (0 until items.length()).mapNotNull { index ->
+            val item = items.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id").trim()
+            val slug = item.optString("slug").trim()
+            val title = item.optString("name").trim()
+            if (id.isBlank() || slug.isBlank() || title.isBlank()) return@mapNotNull null
+            SManga(
+                url = titleUrl(slug, id),
+                title = title,
+                thumbnailUrl = item.optString("cover").takeIf { it.startsWith("http") },
+                genre = names(item.optJSONArray("genres")).ifBlank { null },
+                status = status(item.optString("status"))
+            )
+        }.distinctBy { it.url }
+        val pagination = data.optJSONObject("pagination")
+        return MangasPage(mangas, pagination?.optBoolean("has_next") == true)
+    }
+
+    override suspend fun getMangaDetails(manga: SManga): SManga {
+        val id = mangaId(manga.url) ?: throw IOException("Invalid MangaK title address")
+        val title = api("/titles/$id").optJSONObject("data")?.optJSONObject("title")
+            ?: throw IOException("MangaK could not find this title")
+        manga.title = title.optString("name").ifBlank { manga.title }
+        manga.thumbnailUrl = title.optString("cover").takeIf { it.startsWith("http") } ?: manga.thumbnailUrl
+        manga.description = title.optString("summary").trim().ifBlank { null } ?: manga.description
+        manga.genre = names(title.optJSONArray("genres")).ifBlank { null } ?: manga.genre
+        manga.author = names(title.optJSONArray("authors")).ifBlank { null } ?: manga.author
+        manga.artist = names(title.optJSONArray("artists")).ifBlank { null } ?: manga.artist
+        manga.status = status(title.optString("status"))
+        return manga
+    }
+
+    override suspend fun getChapters(manga: SManga): List<SChapter> {
+        val id = mangaId(manga.url) ?: throw IOException("Invalid MangaK title address")
+        val chapters = api("/titles/$id/chapters").optJSONObject("data")?.optJSONArray("chapters")
+            ?: throw IOException("MangaK returned no chapter index")
+        val slug = Uri.parse(manga.url).path.orEmpty().trim('/').substringAfterLast('/')
+        val result = (0 until chapters.length()).mapNotNull { index ->
+            val chapter = chapters.optJSONObject(index) ?: return@mapNotNull null
+            val chapterId = chapter.optString("id").trim()
+            val chapterName = chapter.optString("name").trim()
+            if (chapterId.isBlank() || chapterName.isBlank()) return@mapNotNull null
+            val pageUrl = absoluteUrl(chapter.optString("url"))
+            SChapter(
+                url = "$pageUrl?hsid=$id&chapterId=$chapterId&series=$slug",
+                name = chapterName,
+                chapterNumber = chapter.optDouble("number", -1.0).toFloat()
+            )
+        }.distinctBy { it.url }
+        if (result.isEmpty()) throw IOException("MangaK returned no readable chapters")
+        return result
+    }
+
+    override suspend fun getPages(chapter: SChapter): List<String> {
+        val uri = Uri.parse(chapter.url)
+        val mangaId = uri.getQueryParameter("hsid") ?: throw IOException("Invalid MangaK chapter address")
+        val chapterId = uri.getQueryParameter("chapterId") ?: throw IOException("Invalid MangaK chapter address")
+        val images = api("/titles/$mangaId/chapters/$chapterId/images")
+            .optJSONObject("data")?.optJSONArray("images") ?: JSONArray()
+        val pages = (0 until images.length()).mapNotNull { images.optString(it).trim().takeIf(String::isNotBlank) }
+        if (pages.isEmpty() || pages.any { !it.startsWith("https://") && !it.startsWith("http://") }) {
+            throw IOException("MangaK returned an empty or invalid chapter image list")
+        }
+        return pages.distinct()
+    }
+
+    private suspend fun api(path: String): JSONObject = JSONObject(
+        getString("$apiBase$path", mapOf("Accept" to "application/json"))
+    ).takeIf { it.optBoolean("success", true) } ?: throw IOException("MangaK API request failed")
+
+    private fun mangaId(url: String): String? = Uri.parse(url).getQueryParameter("hsid")?.takeIf { it.isNotBlank() }
+
+    private fun titleUrl(slug: String, id: String) = "$baseUrl/${slug.trim('/')}?hsid=$id"
+
+    private fun names(array: JSONArray?): String = (0 until (array?.length() ?: 0))
+        .mapNotNull { array?.optJSONObject(it)?.optString("name")?.trim()?.ifBlank { null } }
+        .distinct()
+        .joinToString(", ")
+
+    private fun status(value: String): Int = when (value.lowercase()) {
+        "ongoing", "publishing" -> 1
+        "completed", "complete" -> 2
+        "hiatus", "cancelled", "canceled" -> 3
+        else -> 0
+    }
+}
+
+/** E-Hentai gallery adapter. A gallery is one chapter, backed by actual page links and image URLs. */
+class EHentaiSource : HttpSource() {
+    override val id = "e_hentai_org"
+    override val name = "E-Hentai"
+    override val lang = "en"
+    override val baseUrl = "https://e-hentai.org"
+    override val nsfw = true
+
+    override suspend fun getPopular(page: Int): MangasPage = list(pageUrl("", page))
+
+    override suspend fun getLatest(page: Int): MangasPage = list(pageUrl("", page))
+
+    override suspend fun search(query: String, page: Int): MangasPage = list(pageUrl(query, page))
+
+    private fun pageUrl(query: String, page: Int): String = buildString {
+        append(baseUrl).append('/').append("?f_search=").append(enc(query.trim()))
+        if (page > 1) append("&page=").append(page - 1)
+    }
+
+    private suspend fun list(url: String): MangasPage {
+        val doc = Jsoup.parse(getString(url), url)
+        val items = doc.select("table.itg tr").mapNotNull { row ->
+            val link = row.selectFirst("td.gl3c a[href*=/g/]") ?: return@mapNotNull null
+            val galleryUrl = link.absUrl("href")
+            if (galleryId(galleryUrl) == null) return@mapNotNull null
+            val title = link.selectFirst(".glink")?.text()?.trim()
+                ?: return@mapNotNull null
+            if (title.isBlank()) return@mapNotNull null
+            SManga(galleryUrl, title, imageUrl(row.selectFirst(".glthumb img")))
+        }.distinctBy { it.url }
+        val currentPage = queryParameterInt(url, "page") ?: 0
+        val hasNext = doc.select(".ptt a[href]").any { link ->
+            (queryParameterInt(link.absUrl("href"), "page") ?: -1) > currentPage
+        }
+        return MangasPage(items, hasNext)
+    }
+
+    override suspend fun getMangaDetails(manga: SManga): SManga {
+        val doc = Jsoup.parse(getString(manga.url), manga.url)
+        manga.title = doc.selectFirst("#gj, h1")?.text()?.trim()?.ifBlank { null } ?: manga.title
+        manga.thumbnailUrl = doc.selectFirst("#gd1 img, #gimg img, meta[property=og:image]")
+            ?.let { element ->
+                if (element.tagName() == "meta") element.attr("content").takeIf { it.startsWith("http") }
+                else imageUrl(element)
+            } ?: manga.thumbnailUrl
+        manga.description = doc.selectFirst("meta[property=og:description], meta[name=description]")
+            ?.attr("content")?.trim()?.ifBlank { null } ?: manga.description
+        val tags = doc.select("#taglist .gt, .gt").mapNotNull { element ->
+            element.attr("title").trim().ifBlank { element.text().trim() }.takeIf { it.isNotBlank() }
+        }.distinct()
+        val artists = tags.filter { it.startsWith("artist:", ignoreCase = true) }
+            .map { it.substringAfter(':').trim() }
+        manga.artist = artists.joinToString(", ").ifBlank { null } ?: manga.artist
+        manga.genre = tags.filterNot { it.startsWith("artist:", ignoreCase = true) }
+            .joinToString(", ").ifBlank { null } ?: manga.genre
+        return manga
+    }
+
+    override suspend fun getChapters(manga: SManga): List<SChapter> {
+        val doc = Jsoup.parse(getString(manga.url), manga.url)
+        val count = pageCount(doc)
+        if (count <= 0) throw IOException("E-Hentai did not return a gallery page count")
+        return listOf(SChapter(manga.url, "Gallery ($count pages)", chapterNumber = 1f))
+    }
+
+    override suspend fun getPages(chapter: SChapter): List<String> {
+        val galleryUrl = chapter.url.substringBefore("?p=")
+        val first = Jsoup.parse(getString(galleryUrl), galleryUrl)
+        val count = pageCount(first)
+        if (count <= 0 || count > MAX_GALLERY_PAGES) {
+            throw IOException("E-Hentai returned an invalid gallery page count")
+        }
+
+        val readerUrls = mutableListOf<String>()
+        var galleryPage = 0
+        while (readerUrls.size < count) {
+            if (galleryPage >= MAX_GALLERY_INDEX_PAGES) {
+                throw IOException("E-Hentai gallery index exceeded its safety limit")
+            }
+            val url = if (galleryPage == 0) galleryUrl else "$galleryUrl?p=$galleryPage"
+            val doc = if (galleryPage == 0) first else Jsoup.parse(getString(url), url)
+            val pageLinks = doc.select("#gdt a[href*=/s/]").map { it.absUrl("href") }.filter { it.startsWith("$baseUrl/s/") }
+            if (pageLinks.isEmpty()) throw IOException("E-Hentai returned no reader pages for gallery page ${galleryPage + 1}")
+            readerUrls += pageLinks
+            val hasNext = doc.select(".ptt a[href]").any {
+                (queryParameterInt(it.absUrl("href"), "p") ?: -1) > galleryPage
+            }
+            if (!hasNext) break
+            galleryPage++
+        }
+        if (readerUrls.size < count) throw IOException("E-Hentai returned ${readerUrls.size} of $count reader pages")
+
+        val gate = Semaphore(6)
+        val pages = coroutineScope {
+            readerUrls.take(count).mapIndexed { index, url ->
+                async {
+                    gate.withPermit {
+                        val doc = Jsoup.parse(getString(url), url)
+                        val image = doc.selectFirst("#img")?.let(::imageUrl)
+                            ?: throw IOException("E-Hentai did not return image ${index + 1}")
+                        if (!image.startsWith("https://") && !image.startsWith("http://")) {
+                            throw IOException("E-Hentai returned an invalid image URL for page ${index + 1}")
+                        }
+                        image
+                    }
+                }
+            }.awaitAll()
+        }
+        if (pages.size != count || pages.any(String::isBlank)) throw IOException("E-Hentai returned an incomplete gallery")
+        return pages
+    }
+
+    private fun pageCount(doc: Document): Int = Regex("(?i)\\b(\\d{1,5})\\s+pages?\\b")
+        .find(doc.selectFirst("#gdd")?.text().orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+        ?: Regex("(?i)\\b(\\d{1,5})\\s+pages?\\b").find(doc.selectFirst(".gl4c")?.text().orEmpty())
+            ?.groupValues?.get(1)?.toIntOrNull()
+        ?: 0
+
+    private fun galleryId(url: String): String? =
+        Regex("/g/(\\d+)/[A-Za-z0-9]+/?").find(url)?.groupValues?.get(1)
+
+    private companion object {
+        const val MAX_GALLERY_PAGES = 5000
+        const val MAX_GALLERY_INDEX_PAGES = 200
+    }
+}
 
 /**
  * Site-specific gallery adapters. These sites store a complete gallery as one source chapter so the

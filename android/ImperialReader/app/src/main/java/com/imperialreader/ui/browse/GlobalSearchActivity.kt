@@ -372,9 +372,21 @@ class GlobalSearchActivity : AppCompatActivity() {
                 sources.map { s ->
                     async {
                         val found: List<SManga> = try {
-                            val candidates = searchSem.withPermit {
-                                (if (q.isBlank()) s.getPopular(1) else s.search(q, 1)).mangas.take(15)
+                            val titleCandidates = searchSem.withPermit {
+                                withTimeout(12_000L) {
+                                    (if (q.isBlank()) s.getPopular(1) else s.search(q, 1)).mangas.take(15)
+                                }
                             }
+                            val metadataCandidates = if (q.isBlank() || titleCandidates.size >= 15) emptyList() else try {
+                                searchSem.withPermit { withTimeout(8_000L) { s.searchMetadata(q, 1).mangas.take(15) } }
+                            } catch (_: TimeoutCancellationException) {
+                                emptyList()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                            val candidates = (titleCandidates + metadataCandidates).distinctBy { it.url }
                             if (!hasSearchFilters()) {
                                 candidates
                             } else {
@@ -397,6 +409,9 @@ class GlobalSearchActivity : AppCompatActivity() {
                                 }
                                 matched
                             }
+                        } catch (e: TimeoutCancellationException) {
+                            update(s.id) { it.copy(loading = false, error = "Search timed out") }
+                            return@async
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -446,11 +461,19 @@ class GlobalSearchActivity : AppCompatActivity() {
             sources.forEach { source ->
                 launch {
                     val result = try {
-                        val candidates = withTimeout(12_000L) {
+                        val titleCandidates = withTimeout(12_000L) {
                             sem.withPermit {
                                 (if (q.isBlank()) source.popular(1) else source.search(q, 1)).take(10)
                             }
                         }
+                        val metadataCandidates = if (q.isBlank() || titleCandidates.size >= 10) emptyList() else try {
+                            withTimeout(8_000L) {
+                                sem.withPermit { source.searchMetadata(q, 1).items.take(10) }
+                            }
+                        } catch (_: TimeoutCancellationException) {
+                            emptyList()
+                        }
+                        val candidates = (titleCandidates + metadataCandidates).distinctBy { it.key }
                         if (!hasSearchFilters()) {
                             candidates to null
                         } else {

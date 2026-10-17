@@ -125,9 +125,12 @@ class BookBrowseActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             try {
                 val result = if (query.isBlank()) source.popular(page) else source.search(query, page)
+                val metadata = if (query.isBlank() || result.size >= 24) null else source.searchMetadata(query, page)
                 cloudflareUrl = null
-                result.forEach { b -> if (items.none { it.key == b.key }) items.add(b) }
-                hasMore = result.isNotEmpty()
+                (result + metadata?.items.orEmpty()).distinctBy { it.key }
+                    .forEach { b -> if (items.none { it.key == b.key }) items.add(b) }
+                hasMore = if (query.isBlank()) result.isNotEmpty()
+                else result.isNotEmpty() || metadata?.hasNextPage == true
                 page++
                 adapter.submitList(items.map {
                     CardItem(key = it.key, title = it.title, cover = it.coverUrl, badge1 = if (source.isWebNovel) "NOVEL" else "EPUB", tag = it)

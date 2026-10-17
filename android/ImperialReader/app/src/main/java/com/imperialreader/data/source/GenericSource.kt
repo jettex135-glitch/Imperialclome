@@ -29,6 +29,7 @@ class GenericSource(
     @Volatile private var searchPattern: String? = null
 
     private val novelList = listOf(
+        "/all-series/?paged={p}", "/all-series/page/{p}/",
         "/popular?page={p}", "/most-popular?page={p}", "/novel-list?page={p}", "/novels?page={p}", "/novel?page={p}",
         "/list/best-rated?page={p}", "/ranking?page={p}", "/library?page={p}"
     )
@@ -205,24 +206,26 @@ class GenericSource(
         val detailAreas = if (selectedAreas.isEmpty()) d.select("main, article, body") else selectedAreas
         val genreLinks = detailAreas.select(
             ".genres a, .genre a, .tags a, .tag a, .manga-genres a, .series-genres a, " +
-                ".genres-content a, .mgen a, .seriestugenre a, [itemprop=genre]"
+                ".genres-content a, .mgen a, .seriestugenre a, [itemprop=genre], [rel=tag], " +
+                "[class*=genre] a, [class*=tag] a, a[href*=genre], a[href*=tag]"
         ) + d.select("[itemprop=genre]")
         val labeledGenres = detailAreas.select("li, p, div, span, td, tr").filter { element ->
             val text = element.ownText().ifBlank { element.text() }.trim()
             text.startsWith("Genre", true) || text.startsWith("Tag", true)
         }.flatMap { it.select("a, [itemprop=genre]") }
-        manga.genre = (genreLinks + labeledGenres)
+        val genres = (genreLinks + labeledGenres)
             .filter { link -> link.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
             .map { it.text().trim().trim(',') }
             .filter { it.isNotBlank() && it.length < 50 }.distinct().take(20)
-            .joinToString(", ").ifBlank { null }
+            .joinToString(", ")
         fun labeled(label: String): String? = detailAreas.select("li, p, div, span, td, tr").asSequence()
             .filter { item -> item.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
             .map { it.ownText().ifBlank { it.text() }.trim() }
             .firstOrNull { it.length < 140 && it.startsWith(label, ignoreCase = true) && it.length > label.length }
             ?.substring(label.length)?.trim(' ', ':', '-')?.ifBlank { null }
-        manga.author = labeled("Author") ?: labeled("Authors")
-        manga.artist = labeled("Artist")
+        manga.genre = genres.ifBlank { null } ?: manga.genre
+        manga.author = labeled("Author") ?: labeled("Authors") ?: labeled("Writer") ?: manga.author
+        manga.artist = labeled("Artist") ?: labeled("Artists") ?: labeled("Illustrator") ?: manga.artist
         manga.status = statusFromText(labeled("Status").orEmpty())
         return manga
     }
@@ -313,7 +316,8 @@ class GenericSource(
             .map { it.value.replace("\\/", "/") }.filter { !bad.containsMatchIn(it) }.toList()
         val folder = urls.groupBy { it.substringBeforeLast('/') }.maxByOrNull { it.value.size }?.value.orEmpty()
         if (folder.size >= 2) return folder.distinct()
-        return best
+        if (best.isEmpty()) throw IOException("No reader images found on this chapter")
+        return best.distinct()
     }
 
     private companion object {

@@ -1,5 +1,7 @@
 package com.imperialreader.data.source
 
+import kotlinx.coroutines.CancellationException
+
 data class SManga(
     var url: String,
     var title: String,
@@ -42,10 +44,32 @@ interface Source {
     suspend fun getChapters(manga: SManga): List<SChapter>
     suspend fun getPages(chapter: SChapter): List<String>
 
+    suspend fun searchMetadata(query: String, page: Int): MangasPage {
+        if (query.isBlank()) return MangasPage(emptyList(), false)
+        val catalog = getPopular(page)
+        val matches = catalog.mangas.take(8).mapNotNull { candidate ->
+            val details = try {
+                getMangaDetails(candidate)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            details?.takeIf { matchesMetadataQuery(query, it.author, it.artist, it.genre) }
+        }
+        return MangasPage(matches, catalog.hasNextPage)
+    }
+
     /** Same as [getPages] but also returns the image headers. Combined sources override this. */
     suspend fun loadPages(manga: SManga, chapter: SChapter): ChapterPages =
         ChapterPages(getPages(chapter), imageHeaders())
 
     /** Headers needed when loading page images (usually a Referer). */
     fun imageHeaders(): Map<String, String>
+}
+
+fun matchesMetadataQuery(query: String, author: String?, artist: String?, genre: String?): Boolean {
+    val terms = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    val metadata = listOfNotNull(author, artist, genre).joinToString(" ")
+    return terms.isNotEmpty() && terms.all { metadata.contains(it, ignoreCase = true) }
 }

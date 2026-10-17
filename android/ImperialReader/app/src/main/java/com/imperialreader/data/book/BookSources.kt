@@ -4,8 +4,10 @@ import android.net.Uri
 import com.imperialreader.App
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.data.network.await
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -13,10 +15,12 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Request
+import okhttp3.Response
 import com.imperialreader.data.source.GenericSource
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.source.hostId
 import com.imperialreader.data.source.lazyImage
+import com.imperialreader.data.source.matchesMetadataQuery
 import org.json.JSONArray
 import org.jsoup.Jsoup
 import org.json.JSONObject
@@ -42,6 +46,8 @@ data class BookItem(
 
 data class NovelChapter(val title: String, val url: String)
 
+data class BookSearchPage(val items: List<BookItem>, val hasNextPage: Boolean)
+
 interface BookSource {
     val id: String
     val name: String
@@ -64,6 +70,22 @@ interface BookSource {
     suspend fun popular(page: Int): List<BookItem>
     suspend fun search(query: String, page: Int): List<BookItem>
 
+    suspend fun searchMetadata(query: String, page: Int): BookSearchPage {
+        if (query.isBlank()) return BookSearchPage(emptyList(), false)
+        val candidates = popular(page)
+        val matches = candidates.take(8).mapNotNull { candidate ->
+            val detailed = try {
+                details(candidate)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            detailed?.takeIf { matchesMetadataQuery(query, it.author, it.artist, it.genre) }
+        }
+        return BookSearchPage(matches, candidates.size >= 8)
+    }
+
     /** Direct link to the .epub file (some catalogs need a second request to find it). */
     suspend fun resolveEpubUrl(item: BookItem): String =
         item.epubUrl ?: throw IOException("No EPUB available for this title")
@@ -71,18 +93,24 @@ interface BookSource {
 
 internal suspend fun fetchHtml(url: String): String = withContext(Dispatchers.IO) {
     val request = Request.Builder().url(url).build()
-    App.instance.network.client.await(request).use { resp ->
-        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-        resp.body?.string().orEmpty()
-    }
+    App.instance.network.client.await(request).use { response -> readResponse(url, response) }
 }
 
 internal suspend fun fetchText(url: String): String = withContext(Dispatchers.IO) {
     val request = Request.Builder().url(url).header("Accept", "application/json").build()
-    App.instance.network.client.await(request).use { resp ->
-        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-        resp.body?.string().orEmpty()
+    App.instance.network.client.await(request).use { response -> readResponse(url, response) }
+}
+
+private fun readResponse(url: String, response: Response): String {
+    val body = response.body?.string().orEmpty()
+    val challenge = response.header("cf-mitigated")?.equals("challenge", ignoreCase = true) == true
+    val cloudflare = response.header("Server")?.contains("cloudflare", ignoreCase = true) == true ||
+        response.header("cf-ray") != null
+    if (challenge || (!response.isSuccessful && cloudflare && response.code in setOf(403, 503))) {
+        throw CloudflareException(url)
     }
+    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+    return body
 }
 
 private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
@@ -99,15 +127,19 @@ private fun webNovelDetails(item: BookItem, html: String): BookItem {
         } else null
     }
     val genres = doc.select(
-        ".genres a, .genre a, .tags a, .tag a, .book-info a[href*=genre], .book-info a[href*=tag]"
+        ".genres a, .genre a, .tags a, .tag a, .genres-tags a, " +
+            ".book-info a[href*=genre], .book-info a[href*=tag], a[itemprop=genre], [rel=tag]"
     ).map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+    val artist = field("Artist") ?: field("Artists") ?: field("Illustrator")
+        ?: doc.select(".artist a, .book-artist a, [itemprop=artist]").joinToString(", ") { it.text().trim() }
+            .ifBlank { null }
     val description = doc.selectFirst("#book-description, .book-description, .novel-description, .description")
         ?.text()?.trim()?.ifBlank { null }
     return item.copy(
         author = field("Author") ?: field("Authors")
             ?: doc.selectFirst(".author a, .book-author a")?.text()?.trim()?.ifBlank { null }
             ?: item.author,
-        artist = field("Artist") ?: item.artist,
+        artist = artist ?: item.artist,
         genre = genres.joinToString(", ").ifBlank { null } ?: field("Genres") ?: field("Tags") ?: item.genre,
         description = description ?: item.description
     )
@@ -522,6 +554,117 @@ class WebNovelSource(
     override suspend fun chapterHtml(chapter: NovelChapter): String = engine.chapterText(chapter.url)
 }
 
+/** Lunox is a Madara-based text catalog; premium or empty chapter bodies are rejected. */
+class LunoxScansSource : BookSource {
+    override val id = "novel_lunoxscans_com"
+    override val name = "Lunox Scans"
+    override val description = "Web novel • Lunox Novels"
+    override val isWebNovel = true
+
+    private val engine = GenericSource(name, "https://lunoxscans.com", "en", novel = true)
+
+    private fun item(manga: SManga) = BookItem(
+        sourceId = id,
+        sourceName = name,
+        id = manga.url,
+        title = manga.title,
+        author = manga.author,
+        coverUrl = manga.thumbnailUrl,
+        epubUrl = null,
+        description = manga.description,
+        artist = manga.artist,
+        genre = manga.genre
+    )
+
+    override suspend fun popular(page: Int) = engine.getPopular(page).mangas.map(::item)
+
+    override suspend fun search(query: String, page: Int) = engine.search(query, page).mangas.map(::item)
+
+    override suspend fun searchMetadata(query: String, page: Int): BookSearchPage {
+        if (query.isBlank()) return BookSearchPage(emptyList(), false)
+        val slug = query.trim().lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), "-").trim('-')
+        val routes = listOf("series-genre/$slug", "series-author/$slug", "series-artist/$slug")
+        var candidates = emptyList<SManga>()
+        var hasNextPage = false
+        for (route in routes) {
+            val url = buildString {
+                append("https://lunoxscans.com/").append(route.trim('/')).append('/')
+                if (page > 1) append("page/").append(page).append('/')
+            }
+            try {
+                val doc = Jsoup.parse(fetchHtml(url), url)
+                val found = doc.select(".page-item-detail, .c-tabs-item__content").mapNotNull { card ->
+                    val link = card.selectFirst(".post-title a, h3 a, h5 a, a[href*=/series/]")
+                        ?: return@mapNotNull null
+                    val href = link.absUrl("href")
+                    val title = link.text().trim().ifBlank { link.attr("title").trim() }
+                    if (!href.startsWith("https://lunoxscans.com/series/") || title.isBlank()) return@mapNotNull null
+                    SManga(href, title, lazyImage(card.selectFirst("img")))
+                }.distinctBy { it.url }
+                if (found.isNotEmpty()) {
+                    candidates = found
+                    hasNextPage = doc.select("a[rel=next][href], .pagination a.next[href]").isNotEmpty()
+                    break
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: CloudflareException) {
+                throw e
+            } catch (_: Exception) {
+            }
+        }
+        if (candidates.isEmpty()) return super<BookSource>.searchMetadata(query, page)
+        val matches = candidates.take(24).mapNotNull { candidate ->
+            val detailed = details(item(candidate))
+            detailed.takeIf { matchesMetadataQuery(query, it.author, it.artist, it.genre) }
+        }
+        return BookSearchPage(matches, hasNextPage)
+    }
+
+    override suspend fun details(item: BookItem): BookItem {
+        val details = engine.getMangaDetails(
+            SManga(url = item.id, title = item.title, thumbnailUrl = item.coverUrl, author = item.author)
+        )
+        return item.copy(
+            title = details.title,
+            author = details.author,
+            artist = details.artist,
+            description = details.description,
+            genre = details.genre,
+            coverUrl = details.thumbnailUrl ?: item.coverUrl
+        )
+    }
+
+    override suspend fun chapters(item: BookItem): List<NovelChapter> {
+        val chapters = engine.getChapters(SManga(url = item.id, title = item.title))
+            .asReversed()
+            .mapNotNull { chapter ->
+                val title = chapter.name.trim()
+                if (title.isBlank() || !chapter.url.startsWith("https://lunoxscans.com/series/")) null
+                else NovelChapter(title, chapter.url)
+            }
+        if (chapters.isEmpty()) throw IOException("Lunox returned no readable chapters")
+        return chapters
+    }
+
+    override suspend fun chapterHtml(chapter: NovelChapter): String {
+        if (!chapter.url.startsWith("https://lunoxscans.com/series/")) {
+            throw IOException("Invalid Lunox chapter address")
+        }
+        val doc = Jsoup.parse(fetchHtml(chapter.url), chapter.url)
+        val content = doc.selectFirst(".reading-content") ?: throw IOException("Lunox chapter text was not found")
+        content.select(
+            "script, style, noscript, iframe, nav, header, footer, aside, form, " +
+                ".premium, .premium-block, [class*=premium], [class*=coin], [class*=advert]"
+        ).remove()
+        val paragraphs = content.select("p").filter { it.text().isNotBlank() }
+        if (paragraphs.size < 2 || paragraphs.sumOf { it.text().length } < 80) {
+            throw IOException("Lunox chapter is empty or premium-locked")
+        }
+        return content.html()
+    }
+}
+
 object BookSources {
     /** Web-novel sites from the QuickNovel source list. Domains can change; edit here if one moves. */
     private val novelSites = listOf(
@@ -545,7 +688,7 @@ object BookSources {
     )
 
     val all: List<BookSource> =
-        listOf(LocalBookSource(), GutenbergSource(), InternetArchiveSource(), RoyalRoadSource()) +
+        listOf(LocalBookSource(), GutenbergSource(), InternetArchiveSource(), RoyalRoadSource(), LunoxScansSource()) +
             novelSites.map { (name, url) ->
                 when (hostId(url, name)) {
                     "novelphoenix_com" -> NovelPhoenixSource()
