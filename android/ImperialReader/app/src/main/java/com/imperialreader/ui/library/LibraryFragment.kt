@@ -33,6 +33,7 @@ import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
 import com.imperialreader.R
+import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.db.CategoryEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.LibraryItem
