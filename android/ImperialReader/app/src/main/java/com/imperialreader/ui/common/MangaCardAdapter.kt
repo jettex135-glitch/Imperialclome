@@ -28,7 +28,8 @@ data class CardItem(
 class MangaCardAdapter(
     private val fixedWidthDp: Int? = null,
     private val onClick: (CardItem) -> Unit,
-    private val onLongClick: ((CardItem) -> Unit)? = null
+    private val onLongClick: ((CardItem) -> Unit)? = null,
+    private val onTitleLongClick: ((CardItem) -> Unit)? = null
 ) : ListAdapter<CardItem, MangaCardAdapter.VH>(Diff) {
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
@@ -64,6 +65,11 @@ class MangaCardAdapter(
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(item)
             onLongClick != null
+        }
+        holder.title.setOnLongClickListener {
+            val callback = onTitleLongClick ?: return@setOnLongClickListener false
+            callback(item)
+            true
         }
     }
 

@@ -8,6 +8,7 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import androidx.core.graphics.drawable.toBitmap
 import coil.load
 import coil.size.Size
 import coil.transform.Transformation
@@ -21,7 +22,8 @@ import com.imperialreader.util.dp
  */
 class PageAdapter(
     private val headers: Map<String, String>,
-    private val webtoon: Boolean
+    private val webtoon: Boolean,
+    private val onSavePage: (Int, Bitmap) -> Unit
 ) : RecyclerView.Adapter<PageAdapter.VH>() {
 
     var pages: List<String> = emptyList()
@@ -71,6 +73,16 @@ class PageAdapter(
     }
 
     override fun onBindViewHolder(h: VH, position: Int) {
+        h.image.setOnLongClickListener {
+            val pageIndex = h.bindingAdapterPosition
+            val drawable = h.image.drawable
+            if (pageIndex == RecyclerView.NO_POSITION || drawable == null || h.progress.visibility == View.VISIBLE) {
+                false
+            } else {
+                onSavePage(pageIndex, drawable.toBitmap())
+                true
+            }
+        }
         load(h, position)
     }
 

@@ -377,7 +377,7 @@ class GlobalSearchActivity : AppCompatActivity() {
                                     (if (q.isBlank()) s.getPopular(1) else s.search(q, 1)).mangas.take(15)
                                 }
                             }
-                            val metadataCandidates = if (q.isBlank() || titleCandidates.size >= 15) emptyList() else try {
+                            val metadataCandidates = if (q.isBlank()) emptyList() else try {
                                 searchSem.withPermit { withTimeout(8_000L) { s.searchMetadata(q, 1).mangas.take(15) } }
                             } catch (_: TimeoutCancellationException) {
                                 emptyList()
@@ -466,7 +466,7 @@ class GlobalSearchActivity : AppCompatActivity() {
                                 (if (q.isBlank()) source.popular(1) else source.search(q, 1)).take(10)
                             }
                         }
-                        val metadataCandidates = if (q.isBlank() || titleCandidates.size >= 10) emptyList() else try {
+                        val metadataCandidates = if (q.isBlank()) emptyList() else try {
                             withTimeout(8_000L) {
                                 sem.withPermit { source.searchMetadata(q, 1).items.take(10) }
                             }

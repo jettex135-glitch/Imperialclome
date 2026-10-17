@@ -1,6 +1,17 @@
 package com.imperialreader.ui.library
 
+import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
@@ -18,6 +29,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
 import com.imperialreader.R
@@ -81,6 +93,11 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             onLongClick = { item ->
                 val id = item.tag as Long
                 if (id in selectedIds) showSelectionActions() else toggleSelection(id)
+            },
+            onTitleLongClick = { item ->
+                val clipboard = requireContext().getSystemService(ClipboardManager::class.java)
+                clipboard.setPrimaryClip(ClipData.newPlainText("Title", item.title))
+                requireContext().toast("Title copied")
             }
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
@@ -550,11 +567,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         val prefs = requireContext().app.prefs
         var list = items.filter { q.isBlank() || it.manga.title.contains(q, ignoreCase = true) }
         if (category >= 0) list = list.filter { it.manga.categoryId == category }
-        if (prefs.filterUnread) list = list.filter { it.unread > 0 }
-        if (prefs.filterBookmarked) list = list.filter { it.bookmarked > 0 }
-        if (prefs.filterDownloaded || prefs.downloadedOnly) {
-            list = list.filter { it.downloadedCount > 0 || it.manga.source == LOCAL_SOURCE_ID }
-        }
+        val isUnread = { item: LibraryItem -> item.unread > 0 }
+        val isBookmarked = { item: LibraryItem -> item.bookmarked > 0 }
+        val isDownloaded = { item: LibraryItem -> item.downloadedCount > 0 || item.manga.source == LOCAL_SOURCE_ID }
+        list = applyFilterMode(list, prefs.filterUnreadMode, isUnread)
+        list = applyFilterMode(list, prefs.filterDownloadedMode, isDownloaded)
+        list = applyFilterMode(list, prefs.filterBookmarkedMode, isBookmarked)
+        if (prefs.downloadedOnly) list = list.filter(isDownloaded)
         return when (prefs.sortMode) {
             1 -> list.sortedByDescending { it.lastRead ?: 0L }
             2 -> list.sortedByDescending { it.unread }
@@ -590,19 +609,39 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun showFilterDialog() {
         val prefs = requireContext().app.prefs
+        val context = requireContext()
+        val filters = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(context.dp(24), context.dp(8), context.dp(24), 0)
+        }
+        fun addFilter(label: String, initial: Int, update: (Int) -> Unit) {
+            var mode = initial
+            val drawable = FilterStateDrawable(context.dp(24), mode)
+            val checkbox = MaterialCheckBox(context).apply {
+                text = label
+                buttonDrawable = drawable
+                buttonTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+                isChecked = false
+                setOnClickListener {
+                    mode = when (mode) {
+                        AppPrefs.FILTER_NONE -> AppPrefs.FILTER_INCLUDE
+                        AppPrefs.FILTER_INCLUDE -> AppPrefs.FILTER_EXCLUDE
+                        else -> AppPrefs.FILTER_NONE
+                    }
+                    drawable.mode = mode
+                    isChecked = false
+                    update(mode)
+                    tick.value = tick.value + 1
+                }
+            }
+            filters.addView(checkbox, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        addFilter("Unread", prefs.filterUnreadMode) { prefs.filterUnreadMode = it }
+        addFilter("Downloaded", prefs.filterDownloadedMode) { prefs.filterDownloadedMode = it }
+        addFilter("Bookmarked", prefs.filterBookmarkedMode) { prefs.filterBookmarkedMode = it }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle("Filter")
-            .setMultiChoiceItems(
-                arrayOf("Unread", "Downloaded", "Bookmarked"),
-                booleanArrayOf(prefs.filterUnread, prefs.filterDownloaded, prefs.filterBookmarked)
-            ) { _, which, checked ->
-                when (which) {
-                    0 -> prefs.filterUnread = checked
-                    1 -> prefs.filterDownloaded = checked
-                    else -> prefs.filterBookmarked = checked
-                }
-                tick.value = tick.value + 1
-            }
+            .setView(filters)
             .setPositiveButton("Done", null)
             .show()
     }
@@ -620,4 +659,71 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             }
             .show()
     }
+}
+
+private fun <T> applyFilterMode(items: List<T>, mode: Int, predicate: (T) -> Boolean): List<T> = when (mode) {
+    AppPrefs.FILTER_INCLUDE -> items.filter(predicate)
+    AppPrefs.FILTER_EXCLUDE -> items.filterNot(predicate)
+    else -> items
+}
+
+private class FilterStateDrawable(
+    private val sizePx: Int,
+    mode: Int
+) : Drawable() {
+    var mode: Int = mode
+        set(value) {
+            field = value
+            invalidateSelf()
+        }
+
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    override fun draw(canvas: Canvas) {
+        val bounds = bounds
+        val side = minOf(bounds.width(), bounds.height(), sizePx).toFloat()
+        if (side <= 0f) return
+        val left = bounds.left + (bounds.width() - side) / 2f
+        val top = bounds.top + (bounds.height() - side) / 2f
+        val inset = side * 0.12f
+        val box = RectF(left + inset, top + inset, left + side - inset, top + side - inset)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = (side * 0.08f).coerceAtLeast(1f)
+        paint.color = if (mode == AppPrefs.FILTER_NONE) 0xFF909090.toInt() else 0xFFC9A354.toInt()
+        canvas.drawRoundRect(box, side * 0.12f, side * 0.12f, paint)
+        if (mode == AppPrefs.FILTER_NONE) return
+
+        val mark = Path()
+        if (mode == AppPrefs.FILTER_INCLUDE) {
+            mark.moveTo(left + side * 0.27f, top + side * 0.52f)
+            mark.lineTo(left + side * 0.44f, top + side * 0.68f)
+            mark.lineTo(left + side * 0.74f, top + side * 0.34f)
+        } else {
+            mark.moveTo(left + side * 0.34f, top + side * 0.34f)
+            mark.lineTo(left + side * 0.66f, top + side * 0.66f)
+            mark.moveTo(left + side * 0.66f, top + side * 0.34f)
+            mark.lineTo(left + side * 0.34f, top + side * 0.66f)
+        }
+        paint.color = 0xFFFFF8E8.toInt()
+        canvas.drawPath(mark, paint)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        paint.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun getOpacity() = PixelFormat.TRANSLUCENT
+
+    override fun getIntrinsicWidth() = sizePx
+    override fun getIntrinsicHeight() = sizePx
 }

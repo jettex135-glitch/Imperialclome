@@ -26,6 +26,9 @@ class AppPrefs(context: Context) {
         const val READER_LTR = 0
         const val READER_RTL = 1
         const val READER_VERTICAL = 2
+        const val FILTER_NONE = 0
+        const val FILTER_INCLUDE = 1
+        const val FILTER_EXCLUDE = -1
     }
 
     /** 0 = left-to-right, 1 = right-to-left, 2 = vertical/webtoon (stored as string by ListPreference). */
@@ -86,11 +89,17 @@ class AppPrefs(context: Context) {
         get() = sp.getLong("library_category", -1L)
         set(v) = sp.edit { putLong("library_category", v) }
     var filterUnread: Boolean
-        get() = sp.getBoolean("filter_unread", false)
-        set(v) = sp.edit { putBoolean("filter_unread", v) }
+        get() = filterUnreadMode == FILTER_INCLUDE
+        set(v) { filterUnreadMode = if (v) FILTER_INCLUDE else FILTER_NONE }
+    var filterUnreadMode: Int
+        get() = sp.getInt("filter_unread_mode", if (sp.getBoolean("filter_unread", false)) FILTER_INCLUDE else FILTER_NONE)
+        set(v) = sp.edit { putInt("filter_unread_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
     var filterBookmarked: Boolean
-        get() = sp.getBoolean("filter_bookmarked", false)
-        set(v) = sp.edit { putBoolean("filter_bookmarked", v) }
+        get() = filterBookmarkedMode == FILTER_INCLUDE
+        set(v) { filterBookmarkedMode = if (v) FILTER_INCLUDE else FILTER_NONE }
+    var filterBookmarkedMode: Int
+        get() = sp.getInt("filter_bookmarked_mode", if (sp.getBoolean("filter_bookmarked", false)) FILTER_INCLUDE else FILTER_NONE)
+        set(v) = sp.edit { putInt("filter_bookmarked_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
 
     val showUnreadBadge: Boolean get() = sp.getBoolean("badge_unread", true)
     val showDownloadBadge: Boolean get() = sp.getBoolean("badge_download", true)
@@ -119,8 +128,11 @@ class AppPrefs(context: Context) {
     val localCovers: Boolean get() = sp.getBoolean("local_covers", true)
 
     var filterDownloaded: Boolean
-        get() = sp.getBoolean("filter_downloaded", false)
-        set(v) = sp.edit { putBoolean("filter_downloaded", v) }
+        get() = filterDownloadedMode == FILTER_INCLUDE
+        set(v) { filterDownloadedMode = if (v) FILTER_INCLUDE else FILTER_NONE }
+    var filterDownloadedMode: Int
+        get() = sp.getInt("filter_downloaded_mode", if (sp.getBoolean("filter_downloaded", false)) FILTER_INCLUDE else FILTER_NONE)
+        set(v) = sp.edit { putInt("filter_downloaded_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
 
     // ---- sources ----
     var disabledSources: Set<String>

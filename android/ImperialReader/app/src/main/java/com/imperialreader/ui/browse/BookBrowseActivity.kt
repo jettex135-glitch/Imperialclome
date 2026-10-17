@@ -26,6 +26,7 @@ import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Popular + searchable grid for one EPUB / web-novel catalog. Tap a book to download it into the library. */
 class BookBrowseActivity : AppCompatActivity() {
@@ -125,7 +126,9 @@ class BookBrowseActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             try {
                 val result = if (query.isBlank()) source.popular(page) else source.search(query, page)
-                val metadata = if (query.isBlank() || result.size >= 24) null else source.searchMetadata(query, page)
+                val metadata = if (query.isBlank()) null else withTimeoutOrNull(8_000L) {
+                    source.searchMetadata(query, page)
+                }
                 cloudflareUrl = null
                 (result + metadata?.items.orEmpty()).distinctBy { it.key }
                     .forEach { b -> if (items.none { it.key == b.key }) items.add(b) }

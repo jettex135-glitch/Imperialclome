@@ -1,19 +1,28 @@
 package com.imperialreader.ui.reader
 
+import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.provider.MediaStore
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -35,12 +44,24 @@ import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import kotlin.math.abs
 
 class ReaderActivity : AppCompatActivity() {
+
+    private data class PendingImageSave(val page: Int, val bitmap: Bitmap)
+
+    private var pendingImageSave: PendingImageSave? = null
+    private val storagePermissionRequest = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val pending = pendingImageSave
+        pendingImageSave = null
+        if (granted && pending != null) savePageToGallery(pending.page, pending.bitmap)
+        else if (!granted) toast("Storage permission is required to save a page")
+    }
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -272,7 +293,7 @@ class ReaderActivity : AppCompatActivity() {
         progressBar.visibility = View.GONE
         errorView.visibility = View.GONE
         restoring = true
-        val adapter = PageAdapter(headers, webtoon = !pagerMode)
+        val adapter = PageAdapter(headers, webtoon = !pagerMode, onSavePage = ::confirmSavePage)
         adapter.pages = pages
 
         if (pagerMode) {
@@ -373,6 +394,69 @@ class ReaderActivity : AppCompatActivity() {
         }, 500)
         if (!pagerMode) webtoon.stopScroll()
         loadChapter(chapters[target].id, if (delta < 0) Int.MAX_VALUE else 0)
+    }
+
+    private fun confirmSavePage(page: Int, bitmap: Bitmap) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Save page ${page + 1} to your gallery?")
+            .setPositiveButton("Save") { _, _ ->
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    pendingImageSave = PendingImageSave(page, bitmap)
+                    storagePermissionRequest.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                } else {
+                    savePageToGallery(page, bitmap)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun savePageToGallery(page: Int, bitmap: Bitmap) {
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val titlePart = (manga?.title ?: "ImperialReader")
+                        .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+                        .trim('_')
+                        .take(80)
+                        .ifBlank { "ImperialReader" }
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, "${titlePart}_chapter${index + 1}_page${page + 1}.png")
+                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Imperial Reader")
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
+                    }
+                    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IOException("Could not create a gallery image")
+                    try {
+                        val output = contentResolver.openOutputStream(uri) ?: throw IOException("Could not write the gallery image")
+                        output.use {
+                            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) {
+                                throw IOException("Could not encode the page image")
+                            }
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+                            if (contentResolver.update(uri, ready, null, null) <= 0) {
+                                throw IOException("Could not finish saving the gallery image")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        contentResolver.delete(uri, null, null)
+                        throw e
+                    }
+                }
+                toast("Page ${page + 1} saved to Pictures")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Could not save page: ${e.message}")
+            }
+        }
     }
 
     // ------------------------------------------------------------------ input

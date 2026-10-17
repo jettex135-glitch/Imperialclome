@@ -38,7 +38,8 @@ class MangaKSource : HttpSource() {
             listOf(
                 async { list("q=${enc(query.trim())}", page) },
                 async { list("genres=${enc(genre)}", page) },
-                async { list("author=${enc(query.trim())}", page) }
+                async { list("author=${enc(query.trim())}", page) },
+                async { list("artist=${enc(query.trim())}", page) }
             ).awaitAll()
         }
         return MangasPage(
