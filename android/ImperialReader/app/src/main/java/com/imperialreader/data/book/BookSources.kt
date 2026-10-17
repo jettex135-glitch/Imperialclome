@@ -657,7 +657,7 @@ class LunoxScansSource : BookSource {
             "script, style, noscript, iframe, nav, header, footer, aside, form, " +
                 ".premium, .premium-block, [class*=premium], [class*=coin], [class*=advert]"
         ).remove()
-        val paragraphs = content.select("p").filter { it.text().isNotBlank() }
+        val paragraphs = content.select("p").asSequence().filter { it.text().isNotBlank() }.toList()
         if (paragraphs.size < 2 || paragraphs.sumOf { it.text().length } < 80) {
             throw IOException("Lunox chapter is empty or premium-locked")
         }
