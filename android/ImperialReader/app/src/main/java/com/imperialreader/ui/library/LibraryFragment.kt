@@ -80,7 +80,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             },
             onLongClick = { item ->
                 val id = item.tag as Long
-                if (selectionMode) toggleSelection(id) else showItemMenu(id, item.title)
+                if (id in selectedIds) showSelectionActions() else toggleSelection(id)
             }
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
@@ -398,6 +398,24 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         if (selectedIds.isEmpty()) selectionMode = false
         updateSelectionMenu()
         tick.value = tick.value + 1
+    }
+
+    private fun showSelectionActions() {
+        MaterialAlertDialogBuilder(requireContext())
+            .setItems(arrayOf("Mark as read", "Mark as unread", "Select all", "Cancel selection")) { _, which ->
+                when (which) {
+                    0 -> markSelectedReadState(true)
+                    1 -> markSelectedReadState(false)
+                    2 -> {
+                        selectedIds.addAll(visibleItems.map { it.manga.id })
+                        selectionMode = selectedIds.isNotEmpty()
+                        updateSelectionMenu()
+                        tick.value = tick.value + 1
+                    }
+                    3 -> cancelSelection()
+                }
+            }
+            .show()
     }
 
     private fun cancelSelection() {

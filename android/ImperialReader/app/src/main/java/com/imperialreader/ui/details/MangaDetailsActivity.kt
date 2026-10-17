@@ -99,12 +99,9 @@ class MangaDetailsActivity : AppCompatActivity() {
                 if (chapterSelectionMode) toggleChapterSelection(row.chapter.id)
                 else startActivity(ReaderActivity.intent(this, row.chapter.id))
             },
-            onLong = { row, anchor ->
-                if (chapterSelectionMode) {
-                    chapterSelectionAnchorId?.let { selectChapterRange(it, row.chapter.id) }
-                        ?: toggleChapterSelection(row.chapter.id)
-                }
-                else showChapterMenu(row, anchor)
+            onLong = { row, _ ->
+                if (row.chapter.id in selectedChapterIds) showChapterSelectionActions()
+                else toggleChapterSelection(row.chapter.id)
             },
             onDownload = { row -> onDownloadClick(row) }
         )
@@ -341,6 +338,26 @@ class MangaDetailsActivity : AppCompatActivity() {
             chapterSelectionAnchorId = null
         }
         renderChapterSelection()
+    }
+
+    private fun showChapterSelectionActions() {
+        MaterialAlertDialogBuilder(this)
+            .setItems(arrayOf("Mark as read", "Mark as unread", "Select all", "Cancel selection")) { _, which ->
+                when (which) {
+                    0 -> markSelectedChapters(true)
+                    1 -> markSelectedChapters(false)
+                    2 -> {
+                        selectedChapterIds.addAll(rows.map { it.chapter.id })
+                        chapterSelectionMode = selectedChapterIds.isNotEmpty()
+                        if (chapterSelectionAnchorId == null) {
+                            chapterSelectionAnchorId = selectedChapterIds.firstOrNull()
+                        }
+                        renderChapterSelection()
+                    }
+                    3 -> clearChapterSelection()
+                }
+            }
+            .show()
     }
 
     private fun clearChapterSelection() {
