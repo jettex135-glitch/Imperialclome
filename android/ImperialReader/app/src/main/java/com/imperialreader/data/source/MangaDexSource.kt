@@ -133,7 +133,8 @@ class MangaDexSource : HttpSource() {
         manga.status = when (attrs.optString("status")) {
             "ongoing" -> 1
             "completed" -> 2
-            "hiatus", "cancelled" -> 3
+            "hiatus" -> 3
+            "cancelled" -> 4
             else -> 0
         }
         val tags = attrs.optJSONArray("tags")

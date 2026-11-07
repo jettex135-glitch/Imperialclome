@@ -101,11 +101,12 @@ internal fun parseSiteDate(text: String): Long {
 }
 
 internal fun statusFromText(text: String): Int {
-    val t = text.lowercase()
+    val t = text.lowercase().replace('_', ' ').replace('-', ' ')
     return when {
-        "ongoing" in t || "publishing" in t || "updating" in t -> 1
-        "complete" in t || "finished" in t || "ended" in t -> 2
-        "hiatus" in t || "cancel" in t || "dropped" in t -> 3
+        Regex("""\b(axed|discontinued|cancelled|canceled|dropped)\b""").containsMatchIn(t) -> 4
+        Regex("""\b(hiatus|on hold|paused)\b""").containsMatchIn(t) -> 3
+        Regex("""\b(ongoing|publishing|updating|releasing)\b""").containsMatchIn(t) -> 1
+        Regex("""\b(completed|complete|finished|ended)\b""").containsMatchIn(t) -> 2
         else -> 0
     }
 }

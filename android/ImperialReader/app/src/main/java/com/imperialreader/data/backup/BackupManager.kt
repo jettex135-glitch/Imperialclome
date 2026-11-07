@@ -7,8 +7,8 @@ import com.imperialreader.data.db.CategoryEntity
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
 import com.imperialreader.data.db.MangaEntity
-import com.imperialreader.data.source.Source
 import com.imperialreader.data.source.normalizeTitle
+import com.imperialreader.data.source.Source
 import com.imperialreader.util.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -142,7 +142,11 @@ class BackupManager(private val ctx: Context) {
     }
 
     /** Returns the number of library entries restored. */
-    suspend fun restore(uri: Uri): Int = withContext(Dispatchers.IO) {
+    suspend fun restore(
+        uri: Uri,
+        onProgress: suspend (BackupRestoreProgress) -> Unit = {}
+    ): Int = withContext(Dispatchers.IO) {
+        onProgress(BackupRestoreProgress("Reading backup"))
         val bytes = ctx.contentResolver.openInputStream(uri)?.use(::readBounded)
             ?: throw IOException("Cannot read the backup file")
         val decoded = if (bytes.size >= 2 && bytes[0] == 0x1f.toByte() && bytes[1] == 0x8b.toByte()) {
@@ -151,31 +155,44 @@ class BackupManager(private val ctx: Context) {
             bytes
         }
         val text = decoded.toString(Charsets.UTF_8).trimStart()
-        if (!text.startsWith("{")) return@withContext restoreMihon(decoded)
+        if (!text.startsWith("{")) return@withContext restoreMihon(decoded, onProgress)
         val root = JSONObject(text)
-        if (!root.has("manga")) return@withContext restoreMihon(decoded)
+        if (!root.has("manga")) return@withContext restoreMihon(decoded, onProgress)
         val settings = root.optJSONObject("settings")?.let(::decodeSettings)
 
         val catDao = db.categoryDao()
         val mangaDao = db.mangaDao()
         val chapterDao = db.chapterDao()
+        val categories = root.optJSONArray("categories") ?: JSONArray()
+        val mangaArr = root.getJSONArray("manga")
+        val historyArr = root.optJSONArray("history") ?: JSONArray()
+        val readerModeCount = (0 until mangaArr.length()).count {
+            mangaArr.getJSONObject(it).optInt("readerMode", -1) in 0..2
+        }
+        val total = categories.length() + mangaArr.length() + historyArr.length() +
+            (0 until mangaArr.length()).sumOf { mangaArr.getJSONObject(it).optJSONArray("chapters")?.length() ?: 0 } +
+            readerModeCount + if (settings != null) 1 else 0
+        var completed = 0
+        suspend fun report(stage: String) {
+            completed++
+            onProgress(BackupRestoreProgress(stage, completed, total))
+        }
+        onProgress(BackupRestoreProgress("Preparing restoration", 0, total))
 
         // categories by name
         val categoryByName = catDao.getAll()
             .associateBy { normalizeCategoryName(it.name) }
             .toMutableMap()
-        root.optJSONArray("categories")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val name = arr.getJSONObject(i).getString("name")
-                val key = normalizeCategoryName(name)
-                if (key !in categoryByName) {
-                    val id = catDao.insert(CategoryEntity(name = name, sortOrder = arr.getJSONObject(i).optInt("order")))
-                    categoryByName[key] = CategoryEntity(id = id, name = name)
-                }
+        for (i in 0 until categories.length()) {
+            val name = categories.getJSONObject(i).getString("name")
+            val key = normalizeCategoryName(name)
+            if (key !in categoryByName) {
+                val id = catDao.insert(CategoryEntity(name = name, sortOrder = categories.getJSONObject(i).optInt("order")))
+                categoryByName[key] = CategoryEntity(id = id, name = name)
             }
+            report("Restoring categories")
         }
 
-        val mangaArr = root.getJSONArray("manga")
         var restored = 0
         val readerModes = mutableMapOf<Long, Int>()
         for (i in 0 until mangaArr.length()) {
@@ -234,21 +251,28 @@ class BackupManager(private val ctx: Context) {
                         )
                     )
                 }
+                report("Restoring chapters for ${o.optString("title").ifBlank { "entry ${i + 1}" }}")
             }
             if (toInsert.isNotEmpty()) chapterDao.insertAll(toInsert)
             restored++
+            report("Restoring entry $restored of ${mangaArr.length()}")
         }
 
-        root.optJSONArray("history")?.let { arr ->
+        run {
             val latestByManga = mutableMapOf<Long, HistoryEntity>()
-            for (i in 0 until arr.length()) {
-                val h = arr.getJSONObject(i)
-                val m = mangaDao.find(h.getString("source"), h.getString("mangaUrl")) ?: continue
-                val ch = chapterDao.getAll(m.id).firstOrNull { it.url == h.getString("chapterUrl") } ?: continue
-                val history = HistoryEntity(chapterId = ch.id, lastRead = h.optLong("lastRead"))
-                if (history.lastRead > (latestByManga[m.id]?.lastRead ?: Long.MIN_VALUE)) {
-                    latestByManga[m.id] = history
+            for (i in 0 until historyArr.length()) {
+                val h = historyArr.getJSONObject(i)
+                val m = mangaDao.find(h.getString("source"), h.getString("mangaUrl"))
+                val ch = m?.let { manga ->
+                    chapterDao.getAll(manga.id).firstOrNull { it.url == h.getString("chapterUrl") }
                 }
+                if (m != null && ch != null) {
+                    val history = HistoryEntity(chapterId = ch.id, lastRead = h.optLong("lastRead"))
+                    if (history.lastRead > (latestByManga[m.id]?.lastRead ?: Long.MIN_VALUE)) {
+                        latestByManga[m.id] = history
+                    }
+                }
+                report("Restoring reading history")
             }
             db.withTransaction {
                 latestByManga.forEach { (mangaId, history) ->
@@ -259,16 +283,34 @@ class BackupManager(private val ctx: Context) {
                 }
             }
         }
-        if (settings != null) restoreSettings(settings)
-        readerModes.forEach { (mangaId, mode) -> ctx.app.prefs.setReaderModeFor(mangaId, mode) }
+        if (settings != null) {
+            restoreSettings(settings)
+            report("Restoring settings")
+        }
+        readerModes.forEach { (mangaId, mode) ->
+            ctx.app.prefs.setReaderModeFor(mangaId, mode)
+            report("Restoring reading preferences")
+        }
         restored
     }
 
-    private suspend fun restoreMihon(bytes: ByteArray): Int {
+    private suspend fun restoreMihon(
+        bytes: ByteArray,
+        onProgress: suspend (BackupRestoreProgress) -> Unit
+    ): Int {
         val backup = decodeMihon(bytes)
         if (backup.entries.isEmpty()) {
             throw IOException("This is not a supported Mihon backup")
         }
+        val total = backup.categories.size + backup.entries.sumOf {
+            1 + it.chapters.size + it.histories.size
+        }
+        var completed = 0
+        suspend fun report(stage: String) {
+            completed++
+            onProgress(BackupRestoreProgress(stage, completed, total))
+        }
+        onProgress(BackupRestoreProgress("Preparing restoration", 0, total))
 
         val catDao = db.categoryDao()
         val mangaDao = db.mangaDao()
@@ -307,7 +349,10 @@ class BackupManager(private val ctx: Context) {
             .associateBy { normalizeCategoryName(it.name) }
             .toMutableMap()
         backup.categories.forEach { category ->
-            if (category.name.isBlank()) return@forEach
+            if (category.name.isBlank()) {
+                report("Restoring categories")
+                return@forEach
+            }
             val key = normalizeCategoryName(category.name)
             val saved = categoryByName[key] ?: run {
                 val sortOrder = category.order.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
@@ -316,6 +361,7 @@ class BackupManager(private val ctx: Context) {
                     .also { categoryByName[key] = it }
             }
             categoryById[category.id] = saved
+            report("Restoring categories")
         }
 
         val libraryByTitle = mangaDao.getFavoritesList()
@@ -327,7 +373,7 @@ class BackupManager(private val ctx: Context) {
         for ((entryIndex, entry) in backup.entries.withIndex()) {
             val source = resolveMihonSource(entry.sourceId, entry.url, sourcesById, importedSources)
             val mangaSourceId = source?.id ?: "mihon_backup_${entry.sourceId}"
-            val mangaUrl = source?.let { sourceRelativeUrl(it, entry.url) }
+            val mangaUrl = sourceBackupUrl(entry.url)
                 ?: entry.url.takeIf { it.isNotBlank() }
                 ?: "mihon://source/${entry.sourceId}/${normalizeTitle(entry.title).ifBlank { entryIndex.toString() }}"
             val categoryId = entry.categoryRefs.firstNotNullOfOrNull { categoryRef ->
@@ -383,7 +429,7 @@ class BackupManager(private val ctx: Context) {
             val chapterByBackupUrl = mutableMapOf<String, ChapterEntity>()
             for ((backupOrder, backupChapter) in entry.chapters.withIndex()) {
                 val sourceOrder = backupChapter.sourceOrder ?: backupOrder
-                val chapterUrl = source?.let { sourceRelativeUrl(it, backupChapter.url) } ?: backupChapter.url
+                val chapterUrl = sourceBackupUrl(backupChapter.url)
                 val matching = savedByUrl[chapterUrl] ?: findMatchingChapter(
                     backupChapter,
                     mangaChapters,
@@ -414,6 +460,7 @@ class BackupManager(private val ctx: Context) {
                     savedByUrl[chapterUrl] = inserted
                     chapterByBackupUrl[chapterUrl] = inserted
                 }
+                report("Restoring chapters for ${entry.title.ifBlank { "entry ${entryIndex + 1}" }}")
             }
             val readThrough = entry.chapters.asSequence()
                 .filter { it.read && it.number >= 0f }
@@ -424,10 +471,13 @@ class BackupManager(private val ctx: Context) {
                     .forEach { chapterDao.update(it.copy(read = true)) }
             }
             entry.histories.forEach { history ->
-                if (history.url.isBlank()) return@forEach
-                val chapterUrl = source?.let { sourceRelativeUrl(it, history.url) } ?: history.url
+                if (history.url.isBlank()) {
+                    report("Restoring reading history")
+                    return@forEach
+                }
+                val chapterUrl = sourceBackupUrl(history.url)
                 val matchingBackupChapter = entry.chapters.firstOrNull {
-                    (source?.let { resolved -> sourceRelativeUrl(resolved, it.url) } ?: it.url) == chapterUrl
+                    sourceBackupUrl(it.url) == chapterUrl
                 }
                 val chapter = chapterByBackupUrl[chapterUrl]
                     ?: savedByUrl[chapterUrl]
@@ -435,7 +485,7 @@ class BackupManager(private val ctx: Context) {
                         findMatchingChapter(
                             it,
                             savedByUrl.values,
-                            source?.let { resolved -> sourceRelativeUrl(resolved, it.url) } ?: it.url
+                            sourceBackupUrl(it.url)
                         )
                     }
                     ?: if (mergingByTitle) null else run {
@@ -450,7 +500,10 @@ class BackupManager(private val ctx: Context) {
                     chapterDao.getAll(mangaId).firstOrNull { it.url == chapterUrl }
                         ?: throw IOException("Could not restore history for ${entry.title}")
                 }
-                if (chapter == null) return@forEach
+                if (chapter == null) {
+                    report("Restoring reading history")
+                    return@forEach
+                }
                 savedByUrl[chapterUrl] = chapter
                 if (history.lastRead > 0L) {
                     val previous = db.historyDao().forChapter(chapter.id)
@@ -468,8 +521,10 @@ class BackupManager(private val ctx: Context) {
                         )
                     }
                 }
+                report("Restoring reading history")
             }
             restored++
+            report("Restoring entry $restored of ${backup.entries.size}")
         }
         return restored
     }
@@ -542,19 +597,12 @@ class BackupManager(private val ctx: Context) {
         return "${uri.scheme}://${uri.rawAuthority}"
     }
 
-    private fun sourceRelativeUrl(source: Source, value: String): String {
+    private fun sourceBackupUrl(value: String): String {
         val uri = runCatching {
             java.net.URI(if (value.startsWith("//")) "https:$value" else value)
         }.getOrNull() ?: return value
         if (!uri.isAbsolute) return value
-        val sourceHost = runCatching { java.net.URI(source.baseUrl).host?.removePrefix("www.")?.lowercase() }
-            .getOrNull()
-        if (sourceHost == null || sourceHost != uri.host?.removePrefix("www.")?.lowercase()) return value
-        return buildString {
-            append(uri.rawPath.orEmpty().ifBlank { "/" })
-            uri.rawQuery?.let { append('?').append(it) }
-            uri.rawFragment?.let { append('#').append(it) }
-        }
+        return uri.toString()
     }
 
     private fun decodeMihon(bytes: ByteArray): MihonBackup {

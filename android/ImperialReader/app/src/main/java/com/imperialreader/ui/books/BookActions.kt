@@ -137,6 +137,21 @@ object BookActions {
     }
 
     /** Saves a catalog document under local/<Title>/, rescans, and returns the library entry id. */
+    suspend fun importBook(ctx: Context, item: BookItem, categoryId: Long = 0L, dateAdded: Long = 0L): Long {
+        val id = download(ctx, item)
+        val app = ctx.app
+        val manga = app.db.mangaDao().getById(id)
+            ?: throw IOException("The imported book is not in the library")
+        app.db.mangaDao().update(
+            manga.copy(
+                favorite = true,
+                categoryId = categoryId,
+                dateAdded = dateAdded.takeIf { it > 0L } ?: manga.dateAdded
+            )
+        )
+        return id
+    }
+
     private suspend fun download(ctx: Context, item: BookItem): Long {
         val app = ctx.app
         val local = app.storage.localDir() ?: throw IOException("Storage is not available")

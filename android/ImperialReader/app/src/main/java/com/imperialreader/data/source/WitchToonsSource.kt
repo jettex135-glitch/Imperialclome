@@ -12,7 +12,7 @@ class WitchToonsSource : HttpSource() {
     override val id = "witchtoons_net"
     override val name = "WitchToons"
     override val lang = "en"
-    override val baseUrl = "https://witchtoons.net"
+    override val baseUrl = "https://drakecomic.net"
 
     override suspend fun getPopular(page: Int): MangasPage = list(page, "views")
 
@@ -72,7 +72,8 @@ class WitchToonsSource : HttpSource() {
         manga.status = when (series.optString("status").uppercase()) {
             "ONGOING" -> 1
             "COMPLETED" -> 2
-            "HIATUS", "CANCELLED", "CANCELED" -> 3
+            "HIATUS" -> 3
+            "CANCELLED", "CANCELED", "AXED", "DISCONTINUED" -> 4
             else -> manga.status
         }
         return manga

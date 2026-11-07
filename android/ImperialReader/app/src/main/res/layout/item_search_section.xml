@@ -11,10 +11,10 @@
             android:orientation="vertical">
             <TextView android:id="@+id/sectionTitle"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/gold" android:textSize="16sp" android:textStyle="bold"/>
+                android:textColor="?attr/colorPrimary" android:textSize="16sp" android:textStyle="bold"/>
             <TextView android:id="@+id/sectionInfo"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+                android:textColor="?attr/colorOnSurfaceVariant" android:textSize="12sp"/>
         </LinearLayout>
         <ProgressBar android:id="@+id/sectionProgress"
             style="?android:attr/progressBarStyleSmall"
@@ -23,7 +23,7 @@
     <TextView android:id="@+id/sectionError"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="4dp"
-        android:textColor="@color/on_surface_variant" android:textSize="13sp" android:visibility="gone"/>
+        android:textColor="?attr/colorOnSurfaceVariant" android:textSize="13sp" android:visibility="gone"/>
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/sectionRecycler"
         android:layout_width="match_parent" android:layout_height="wrap_content"

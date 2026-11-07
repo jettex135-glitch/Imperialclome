@@ -84,7 +84,7 @@ private data class PendingMigrationConfirmation(
     val combinedMembers: List<CombinedSource.Member>?
 )
 
-class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
+class MangaDetailsActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_ID = "manga_id"
@@ -148,8 +148,8 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
         toolbar = findViewById(R.id.toolbar)
         toolbar.setTitleTextColor(Color.WHITE)
-        toolbar.setNavigationIconTint(getColor(R.color.gold))
-        toolbar.overflowIcon?.setTint(getColor(R.color.gold))
+        toolbar.setNavigationIconTint(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+        toolbar.overflowIcon?.setTint(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.details_menu)
         toolbar.setOnMenuItemClickListener { onMenu(it.itemId); true }
@@ -259,10 +259,11 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         }
         fab.visibility = View.VISIBLE
         val anyProgress = ordered.any { it.read || it.lastPageRead > 0 }
+        val anime = manga?.let { app.sources.get(it.source)?.isAnime } == true
         fab.text = when {
-            ordered.all { it.read } -> "Read again"
+            ordered.all { it.read } -> if (anime) "Watch again" else "Read again"
             anyProgress -> "Resume"
-            else -> "Start"
+            else -> if (anime) "Watch" else "Start"
         }
     }
 
@@ -368,10 +369,11 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun showMigrationSources() {
         val current = manga ?: return
+        val isWebNovel = BookSources.get(current.source)?.isWebNovel == true
         if (current.source == LOCAL_SOURCE_ID ||
-            (current.source != CombinedSource.ID && app.sources.get(current.source) == null)
+            (!isWebNovel && current.source != CombinedSource.ID && app.sources.get(current.source) == null)
         ) {
-            toast("This entry cannot be migrated to a manga source")
+            toast("This entry cannot be migrated to a compatible source")
             return
         }
 
@@ -906,15 +908,15 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             }
             h.genres.text = manga.genre.orEmpty()
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
-            h.chapters.text = "$count chapters"
-            h.title.setTextColor(getColor(R.color.on_surface))
-            h.author.setTextColor(getColor(R.color.on_surface_variant))
-            h.status.setTextColor(getColor(R.color.on_surface_variant))
-            h.desc.setTextColor(getColor(R.color.on_surface))
-            h.genres.setTextColor(getColor(R.color.gold_light))
-            h.chapters.setTextColor(getColor(R.color.on_surface))
-            h.btnLibrary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
-            h.btnWeb.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
+            h.chapters.text = if (source?.isAnime == true) "$count episodes" else "$count chapters"
+            h.title.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.author.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.status.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.desc.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.genres.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorSecondary))
+            h.chapters.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.btnLibrary.backgroundTintList = ColorStateList.valueOf(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+            h.btnWeb.backgroundTintList = ColorStateList.valueOf(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
         }
     }
 
@@ -938,14 +940,14 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         val save = ImageButton(this).apply {
             contentDescription = "Save cover image"
             setImageResource(R.drawable.ic_download)
-            setColorFilter(getColor(R.color.gold))
+            setColorFilter(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
             val density = resources.displayMetrics.density
             val inset = (20 * density).toInt()
             setPadding(inset / 2, inset / 2, inset / 2, inset / 2)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(0xDD202020.toInt())
-                setStroke((2 * density).toInt(), getColor(R.color.gold))
+                setStroke((2 * density).toInt(), com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
             }
             setOnClickListener {
                 isEnabled = false
@@ -1018,10 +1020,10 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
                 if (!c.read && c.lastPageRead > 0) "Page ${c.lastPageRead + 1}" else null
             ).joinToString(" • ")
             h.sub.alpha = if (c.read) 0.5f else 1f
-            h.sub.setTextColor(getColor(R.color.on_surface_variant))
-            h.options.setTextColor(getColor(R.color.on_surface_variant))
-            h.icon.setColorFilter(getColor(R.color.gold))
-            h.progress.setIndicatorColor(getColor(R.color.gold))
+            h.sub.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.options.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.icon.setColorFilter(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+            h.progress.setIndicatorColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
 
             if (row.progress != null) {
                 h.progress.visibility = View.VISIBLE

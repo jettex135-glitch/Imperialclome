@@ -128,7 +128,7 @@ class SourcesFragment : Fragment(R.layout.fragment_sources) {
             val off = s.id in disabled
             h.icon.text = s.name.take(1).uppercase()
             h.name.text = s.name
-            h.lang.text = s.lang.uppercase() + (if (s.nsfw) " • 18+" else "") + (if (off) " • disabled" else "")
+            h.lang.text = s.lang.uppercase() + (if (s.isAnime) " • ANIME" else "") + (if (s.nsfw) " • 18+" else "") + (if (off) " • disabled" else "")
             h.itemView.alpha = if (off) 0.4f else 1f
             h.itemView.setOnClickListener { onOpen(s, false) }
             h.itemView.setOnLongClickListener { onLong(s); true }

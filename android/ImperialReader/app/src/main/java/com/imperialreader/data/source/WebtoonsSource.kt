@@ -8,6 +8,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.parser.Parser
 import java.util.concurrent.ConcurrentHashMap
 import java.io.IOException
+import java.util.Base64
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Calendar
@@ -183,7 +184,18 @@ class WebtoonsSource : HttpSource() {
     private suspend fun loadEpisode(chapter: SChapter): ChapterPages {
         val viewerUrl = absoluteUrl(chapter.url)
         val document = Jsoup.parse(getString(viewerUrl), viewerUrl)
-        val audioUrl = episodeAudioUrls[viewerUrl] ?: parseViewerAudioUrl(document, viewerUrl)
+        val audioUrl = episodeAudioUrls[viewerUrl]
+            ?: parseViewerAudioUrl(document, viewerUrl)
+            ?: try {
+                resolveViewerAudioUrl(document, viewerUrl)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (chapter.name.contains("♫")) {
+                    android.util.Log.w("WebtoonsSource", "Could not fetch WEBTOON episode audio", e)
+                }
+                null
+            }
         val pages = document.select("div#_imageList > img")
             .mapNotNull { it.attr("data-url").ifBlank { it.attr("src") } }
             .mapNotNull { imageUrl ->
@@ -212,6 +224,30 @@ class WebtoonsSource : HttpSource() {
             .toList()
         if (motionPages.isEmpty()) throw IOException("WEBTOON returned no readable episode images")
         return ChapterPages(motionPages, imageHeaders(), audioUrl)
+    }
+
+    private suspend fun resolveViewerAudioUrl(document: Document, viewerUrl: String): String? {
+        val audioId = parseViewerAudioId(document) ?: return null
+        val endpoint = "https://apis.naver.com".toHttpUrl().newBuilder()
+            .addPathSegments("audiocweb/audiocplayogwweb/play/audio")
+            .addPathSegment(audioId)
+            .addPathSegments("audio/token")
+            .addQueryParameter("quality", "MIDDLE")
+            .addQueryParameter("acceptCodecs", "AAC,MP3")
+            .build()
+        val response = JSONObject(
+            getString(
+                endpoint.toString(),
+                mapOf(
+                    "Accept" to "application/json",
+                    "Origin" to baseUrl,
+                    "Referer" to viewerUrl
+                )
+            )
+        )
+        val playToken = response.optJSONObject("result")?.optString("playToken").orEmpty()
+        return parsePlayTokenAudioUrl(playToken)
+            ?: throw IOException("WEBTOON audio service did not return a playable audio URL")
     }
 
     private fun parseMangaCards(document: Document): List<SManga> =
@@ -254,6 +290,9 @@ class WebtoonsSource : HttpSource() {
             """(?:https?:)?//[^"'\\\s<>]+?\.(?:mp3|m4a|aac|ogg|opus|wav|m3u8)(?:[?#][^"'\\\s<>]*)?""",
             RegexOption.IGNORE_CASE
         )
+        private val EPISODE_BGM_LIST_REGEX = Regex(
+            """episodeBgmList\s*:\s*(\[[\s\S]*?])\s*,\s*audioPartnerKey"""
+        )
         private val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "aac", "ogg", "opus", "wav", "m3u8")
 
         internal fun parseEmbeddedImageList(source: String): List<String> =
@@ -294,6 +333,32 @@ class WebtoonsSource : HttpSource() {
                 if (parsed.isHttps && extension in AUDIO_EXTENSIONS) return url
             }
             return null
+        }
+
+        internal fun parseViewerAudioId(document: Document): String? {
+            val json = EPISODE_BGM_LIST_REGEX.find(document.toString())
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: return null
+            val bgmList = runCatching { org.json.JSONArray(json) }.getOrNull() ?: return null
+            return (0 until bgmList.length())
+                .asSequence()
+                .mapNotNull { bgmList.optJSONObject(it)?.optString("audioId") }
+                .firstOrNull(String::isNotBlank)
+        }
+
+        internal fun parsePlayTokenAudioUrl(playToken: String): String? {
+            if (playToken.isBlank()) return null
+            val payload = runCatching {
+                String(Base64.getUrlDecoder().decode(playToken), Charsets.UTF_8)
+            }.getOrNull() ?: return null
+            val url = runCatching {
+                JSONObject(payload).optJSONObject("audioInfo")?.optString("url")
+            }.getOrNull()?.takeIf(String::isNotBlank) ?: return null
+            val parsed = runCatching { url.toHttpUrl() }.getOrNull() ?: return null
+            return url.takeIf {
+                parsed.isHttps && (parsed.host == "pstatic.net" || parsed.host.endsWith(".pstatic.net"))
+            }
         }
 
         private fun parseEpisodeAudioUrl(episode: JSONObject): String? {

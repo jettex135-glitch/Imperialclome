@@ -18,7 +18,7 @@ import com.imperialreader.util.app
  * In-app browser. Cookies are shared with the HTTP client, so solving a Cloudflare
  * challenge here lets the sources work again afterwards.
  */
-class WebViewActivity : androidx.appcompat.app.AppCompatActivity() {
+class WebViewActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_URL = "url"

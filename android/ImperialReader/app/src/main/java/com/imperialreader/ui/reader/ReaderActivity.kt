@@ -34,6 +34,7 @@ import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.ui.common.StarSpriteView
+import com.imperialreader.ui.player.AnimePlayerActivity
 import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
@@ -43,7 +44,7 @@ import kotlinx.coroutines.launch
 import java.io.IOException
 import kotlin.math.abs
 
-class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
+class ReaderActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -232,6 +233,11 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                 val chapterDao = app.db.chapterDao()
                 val ch = chapterDao.getById(chapterId) ?: throw IOException("Chapter not found")
                 val m = app.db.mangaDao().getById(ch.mangaId) ?: throw IOException("Manga not found")
+                if (app.sources.get(m.source)?.isAnime == true) {
+                    startActivity(AnimePlayerActivity.intent(this@ReaderActivity, chapterId))
+                    finish()
+                    return@launch
+                }
                 manga = m
                 mode = app.prefs.readerModeFor(m.id)
                 chapters = chapterDao.getAll(m.id).sortedByDescending { it.sourceOrder }
@@ -399,13 +405,13 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     override fun onPause() {
-        pageAdapter?.pausePawchiveVideo()
+        pageAdapter?.pauseVideo()
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
-        pageAdapter?.resumePawchiveVideo()
+        pageAdapter?.resumeVideo()
     }
 
     private fun updateNextChapterPrompt() {

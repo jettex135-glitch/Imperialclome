@@ -98,7 +98,8 @@ class MangaFireSource : HttpSource() {
         manga.status = when (details.optString("status").lowercase()) {
             "releasing" -> 1
             "finished" -> 2
-            "on_hiatus", "discontinued" -> 3
+            "on_hiatus" -> 3
+            "discontinued", "cancelled", "canceled", "axed" -> 4
             else -> 0
         }
         return manga

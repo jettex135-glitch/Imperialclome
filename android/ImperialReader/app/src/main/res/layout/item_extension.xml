@@ -8,10 +8,10 @@
         android:orientation="vertical">
         <TextView android:id="@+id/extName"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textColor="@color/on_surface" android:textSize="16sp"/>
+            android:textColor="?attr/colorOnSurface" android:textSize="16sp"/>
         <TextView android:id="@+id/extInfo"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+            android:textColor="?attr/colorOnSurfaceVariant" android:textSize="12sp"/>
     </LinearLayout>
     <com.google.android.material.button.MaterialButton
         android:id="@+id/extAction"

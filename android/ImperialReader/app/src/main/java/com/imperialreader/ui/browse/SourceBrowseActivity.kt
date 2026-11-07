@@ -33,7 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
-class SourceBrowseActivity : androidx.appcompat.app.AppCompatActivity() {
+class SourceBrowseActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_SOURCE = "source_id"

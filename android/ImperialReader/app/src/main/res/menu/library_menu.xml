@@ -12,6 +12,7 @@
     <item android:id="@+id/action_bulk_category" android:title="Move to category" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_bulk_read" android:title="Mark selected as read" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_bulk_unread" android:title="Mark selected as unread" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_bulk_migrate" android:title="Migrate selected" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_bulk_remove" android:title="Remove from library" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_cancel_selection" android:title="Cancel selection" android:visible="false" app:showAsAction="never"/>
 </menu>

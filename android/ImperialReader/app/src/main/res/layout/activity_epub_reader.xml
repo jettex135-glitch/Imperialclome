@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:background="@color/black">
+    android:orientation="vertical" android:background="?android:attr/colorBackground">
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent" android:layout_height="?attr/actionBarSize"
-        android:background="@color/black" app:navigationIcon="@drawable/ic_arrow_back"/>
+        android:background="?android:attr/colorBackground" app:navigationIcon="@drawable/ic_arrow_back"/>
     <WebView android:id="@+id/web"
         android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
     <LinearLayout
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:gravity="center_vertical"
-        android:background="@color/nav" android:padding="4dp">
+        android:background="?attr/colorSurface" android:padding="4dp">
         <ImageButton android:id="@+id/btnPrev"
             android:layout_width="48dp" android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
@@ -19,7 +19,7 @@
         <TextView android:id="@+id/txtSection"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:maxLines="1" android:ellipsize="end"
-            android:textColor="@color/on_surface" android:textSize="14sp"/>
+            android:textColor="?attr/colorOnSurface" android:textSize="14sp"/>
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSmaller" style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="A-"/>
@@ -33,11 +33,11 @@
     </LinearLayout>
     <SeekBar android:id="@+id/sectionProgress"
         android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:background="@color/nav" android:paddingStart="16dp" android:paddingEnd="16dp"/>
+        android:background="?attr/colorSurface" android:paddingStart="16dp" android:paddingEnd="16dp"/>
     <LinearLayout
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:gravity="center"
-        android:background="@color/nav" android:paddingBottom="4dp">
+        android:background="?attr/colorSurface" android:paddingBottom="4dp">
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnTheme" style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Theme"/>

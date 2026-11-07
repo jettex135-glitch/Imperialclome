@@ -29,6 +29,7 @@
 
         <activity android:name=".ui.details.MangaDetailsActivity" android:exported="false"/>
         <activity android:name=".ui.details.MigrationSourceSelectionActivity" android:exported="false"/>
+        <activity android:name=".ui.details.MassMigrationActivity" android:exported="false"/>
         <activity android:name=".ui.browse.SourceBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.BookBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.LocalEntriesActivity" android:exported="false"/>
@@ -36,9 +37,13 @@
             android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".ui.reader.ReaderActivity" android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"/>
+        <activity android:name=".ui.player.AnimePlayerActivity" android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"/>
         <activity android:name=".ui.reader.EpubReaderActivity" android:exported="false"/>
         <activity android:name=".ui.reader.PdfReaderActivity" android:exported="false"/>
         <activity android:name=".ui.more.SettingsActivity" android:exported="false"/>
+        <activity android:name=".ui.theme.ThemeEditorActivity" android:exported="false"/>
         <activity android:name=".ui.security.AppLockActivity" android:exported="false"/>
         <activity android:name=".ui.webview.WebViewActivity" android:exported="false"/>
 

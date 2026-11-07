@@ -12,8 +12,8 @@ android {
         applicationId "com.imperialreader"
         minSdk 26
         targetSdk 34
-        versionCode 17
-        versionName "V15"
+        versionCode 18
+        versionName "V16"
     }
 
     buildTypes {
@@ -65,5 +65,12 @@ dependencies {
     implementation 'io.coil-kt:coil-gif:2.5.0'
     implementation 'com.github.junrar:junrar:7.5.5'
 
+    // Anime player (AnimePlayerActivity only)
+    implementation 'androidx.media3:media3-exoplayer:1.2.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.2.1'
+    implementation 'androidx.media3:media3-ui:1.2.1'
+    implementation 'androidx.media3:media3-datasource-okhttp:1.2.1'
+
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }

@@ -31,6 +31,7 @@ import com.imperialreader.ui.common.LibraryActions
 import com.imperialreader.ui.common.MangaCardAdapter
 import com.imperialreader.ui.common.StarSpriteView
 import com.imperialreader.ui.details.MangaDetailsActivity
+import com.imperialreader.ui.details.MassMigrationActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.dp
 import com.imperialreader.util.toast
@@ -160,6 +161,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 R.id.action_bulk_category -> moveSelectedToCategory()
                 R.id.action_bulk_read -> markSelectedAsRead()
                 R.id.action_bulk_unread -> markSelectedAsUnread()
+                R.id.action_bulk_migrate -> migrateSelected()
                 R.id.action_bulk_remove -> confirmRemoveSelected()
                 R.id.action_cancel_selection -> cancelSelection()
             }
@@ -397,6 +399,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             title = "Mark selected as read"
         }
         menu.findItem(R.id.action_bulk_unread)?.isVisible = selecting && selectedIds.isNotEmpty()
+        menu.findItem(R.id.action_bulk_migrate)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_bulk_remove)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_cancel_selection)?.isVisible = selecting
     }
@@ -472,6 +475,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun markSelectedAsUnread() {
         markSelectedReadState(false)
+    }
+
+    private fun migrateSelected() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) return
+        startActivity(MassMigrationActivity.intent(requireContext(), ids))
+        cancelSelection()
     }
 
     private fun markSelectedReadState(read: Boolean) {

@@ -85,7 +85,9 @@ open class MadaraSource(
         manga.status = when {
             "ongoing" in statusText || "publishing" in statusText -> 1
             "completed" in statusText || "complete" in statusText || "end" in statusText -> 2
-            "hiatus" in statusText || "cancel" in statusText || "drop" in statusText -> 3
+            "hiatus" in statusText || "on hold" in statusText -> 3
+            "axed" in statusText || "discontinued" in statusText ||
+                "cancel" in statusText || "drop" in statusText -> 4
             else -> 0
         }
         return manga

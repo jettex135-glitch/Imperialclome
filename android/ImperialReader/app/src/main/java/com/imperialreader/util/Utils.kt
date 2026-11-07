@@ -88,6 +88,7 @@ fun relativeTime(ms: Long): String {
 fun statusLabel(status: Int): String = when (status) {
     1 -> "Ongoing"
     2 -> "Completed"
-    3 -> "Hiatus / Cancelled"
+    3 -> "Hiatus"
+    4 -> "Axed"
     else -> "Unknown"
 }

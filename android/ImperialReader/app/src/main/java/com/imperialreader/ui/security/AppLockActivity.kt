@@ -11,7 +11,7 @@ import com.google.android.material.button.MaterialButton
 import com.imperialreader.R
 import com.imperialreader.util.app
 
-class AppLockActivity : androidx.appcompat.app.AppCompatActivity() {
+class AppLockActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
     private lateinit var status: TextView
     private var authenticating = false
 

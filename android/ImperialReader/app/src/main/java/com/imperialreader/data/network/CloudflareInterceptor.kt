@@ -70,7 +70,15 @@ internal class CloudflareInterceptor(
             )
         }
 
-        return chain.proceed(request)
+        val retried = chain.proceed(request)
+        if (isCloudflareChallenge(retried)) {
+            retried.close()
+            throw CloudflareException(
+                request.url.toString(),
+                "Cloudflare is still blocking this request. Open the source in WebView, complete its check, then retry."
+            )
+        }
+        return retried
     }
 
     private fun resolveChallenge(

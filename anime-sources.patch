@@ -1,0 +1,1665 @@
+diff -ruN orig/Imperialclome/.github/copilot-instructions.md p/Imperialclome/.github/copilot-instructions.md
+--- orig/Imperialclome/.github/copilot-instructions.md	1970-01-01 00:00:00.000000000 +0000
++++ p/Imperialclome/.github/copilot-instructions.md	2026-11-07 09:10:13.667597814 +0000
+@@ -0,0 +1,47 @@
++# Imperial Reader – instructions for Copilot
++
++## Scope rule (most important)
++Make ONLY the change that was asked for. Preserve every other working feature and the existing UI.
++Do not redesign, rename, reformat, reorder, "clean up", refactor or upgrade anything that was not named in the request.
++Reuse existing screens, adapters, layouts and flows instead of creating new ones.
++If a request seems to need a change outside the named files, STOP and ask first. Never "fix" unrelated code you notice; mention it instead.
++
++## Before editing
++1. List the exact files you plan to touch and why. Keep that list as short as possible.
++2. Read the file's existing patterns first and copy them (naming, error handling, coroutines, Jsoup usage).
++3. Prefer adding a new file over editing a shared one.
++
++## Do NOT touch unless the request names them
++- `data/db/*` (Room entities, DAOs, AppDatabase) – no schema changes, no new columns, no migrations
++- `data/backup/*`, `data/download/*`, `data/update/*`, `data/storage/*`
++- `data/network/*` (OkHttp client, CloudflareInterceptor)
++- `ui/theme/*`, `res/layout/*`, `res/values/*`, `AndroidManifest.xml`, `app/build.gradle`, `.github/workflows/*`
++- Existing source files in `data/source/` other than the one being worked on
++- Version numbers, dependencies, ProGuard rules
++
++## Sources
++- Every site is a class implementing `Source` (see `data/source/Source.kt`). To add a site, add ONE new class/file and ONE line in `SourceManager.builtin`.
++- Keep the `Source` interface backward compatible: new members need a default value.
++- Anime sources extend `AnimeHttpSource` in `data/source/AnimeSources.kt`: `SManga` = anime, `SChapter` = episode, episodes are returned newest first, `loadEpisode()` returns one playable URL (.m3u8 or .mp4) plus its headers.
++- Source ids are permanent (they are stored in the user's library). Never change an existing `id`.
++- Never invent CSS selectors or API endpoints. If you cannot verify a site's markup or endpoint, say so and leave a clearly named constant for the user to fill in.
++
++## Anime wording
++Only when `source.isAnime` is true: "chapters" -> "episodes", "Start/Read again" -> "Watch/Watch again". Manga, comic and novel sources must look and behave exactly as before.
++
++## Reader and anime player
++- Manga/comic video pages are handled in `ui/reader/PageAdapter.kt` (VideoView): `.mp4` loops, `.m3u8` plays once. Leave that as is.
++- Anime episodes are routed by `ReaderActivity.loadChapter` to `ui/player/AnimePlayerActivity.kt` (Media3/ExoPlayer: SUB/DUB toggle, server picker, prev/next episode, progress in seconds in `lastPageRead`). Player changes go in that file only.
++- Media3 is used by the anime player only. Do not add other player libraries or move manga/novel reading onto it.
++- Sub/dub servers come from `Source.getVideoOptions()`; sources that do not override it fall back to one default option.
++- Stream discovery order in `AnimeHttpSource.resolveEmbed`: plain HTML, unpacked JS, nested embeds, then `WebViewStream` (hidden WebView that watches requests for .m3u8/.mp4 and can click a server button such as "DUB-1"). Keep that order.
++- Anime downloads: HLS episodes are merged into one file by `data/download/HlsDownloader.kt` (called from `DownloadManager.download` only when `source.isAnime`); the player plays that file when `chapter.downloaded`. Image/manga downloads must stay on the existing path. Anime sub/dub downloads: `DownloadManager.enqueue(..., dub)`; files are `001.*` = sub, `002.*` = dub; the Sub/Dub prompt (`withAudioChoice` in `MangaDetailsActivity`) appears for anime sources only.
++
++## Large archives (existing rule)
++Local CBR/RAR: stage to a cache file and open Junrar with `Archive(File)`, never `Archive(InputStream)`. No arbitrary size caps.
++
++## Done checklist
++- `cd android/ImperialReader && gradle assembleDebug` succeeds
++- The diff contains only the files you listed up front
++- No unrelated formatting/import-order changes
++- Summarise what changed and what you deliberately did NOT change
+diff -ruN orig/Imperialclome/android/ImperialReader/app/build.gradle p/Imperialclome/android/ImperialReader/app/build.gradle
+--- orig/Imperialclome/android/ImperialReader/app/build.gradle	2026-11-07 01:38:34.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/build.gradle	2026-11-07 03:40:20.317504622 +0000
+@@ -65,6 +65,12 @@
+     implementation 'io.coil-kt:coil-gif:2.5.0'
+     implementation 'com.github.junrar:junrar:7.5.5'
+ 
++    // Anime player (AnimePlayerActivity only)
++    implementation 'androidx.media3:media3-exoplayer:1.2.1'
++    implementation 'androidx.media3:media3-exoplayer-hls:1.2.1'
++    implementation 'androidx.media3:media3-ui:1.2.1'
++    implementation 'androidx.media3:media3-datasource-okhttp:1.2.1'
++
+     testImplementation 'junit:junit:4.13.2'
+     testImplementation 'org.json:json:20240303'
+ }
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/AndroidManifest.xml p/Imperialclome/android/ImperialReader/app/src/main/AndroidManifest.xml
+--- orig/Imperialclome/android/ImperialReader/app/src/main/AndroidManifest.xml	2026-11-07 02:03:08.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/AndroidManifest.xml	2026-11-07 03:40:20.317124738 +0000
+@@ -37,6 +37,9 @@
+             android:windowSoftInputMode="adjustResize"/>
+         <activity android:name=".ui.reader.ReaderActivity" android:exported="false"
+             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"/>
++        <activity android:name=".ui.player.AnimePlayerActivity" android:exported="false"
++            android:screenOrientation="sensorLandscape"
++            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"/>
+         <activity android:name=".ui.reader.EpubReaderActivity" android:exported="false"/>
+         <activity android:name=".ui.reader.PdfReaderActivity" android:exported="false"/>
+         <activity android:name=".ui.more.SettingsActivity" android:exported="false"/>
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/DownloadManager.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/DownloadManager.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/DownloadManager.kt	2026-11-06 23:44:56.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/DownloadManager.kt	2026-11-07 09:10:13.652034219 +0000
+@@ -8,7 +8,9 @@
+ import com.imperialreader.data.db.MangaEntity
+ import com.imperialreader.data.book.BookSources
+ import com.imperialreader.data.book.NovelChapterEpub
++import com.imperialreader.data.source.ChapterPages
+ import com.imperialreader.data.source.SChapter
++import com.imperialreader.data.source.Source
+ import com.imperialreader.data.source.MangaFirePageTransform
+ import com.imperialreader.data.source.SManga
+ import com.imperialreader.util.app
+@@ -56,7 +58,8 @@
+  */
+ class DownloadManager(private val ctx: Context) {
+ 
+-    private data class Task(val manga: MangaEntity, val chapter: ChapterEntity)
++    /** [dub]: anime only. null = the source default (sub), false = sub, true = dub. */
++    private data class Task(val manga: MangaEntity, val chapter: ChapterEntity, val dub: Boolean? = null)
+ 
+     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+     private val queue = ArrayDeque<Task>()
+@@ -139,10 +142,11 @@
+     }
+ 
+     @Synchronized
+-    fun enqueue(manga: MangaEntity, chapters: List<ChapterEntity>) {
++    fun enqueue(manga: MangaEntity, chapters: List<ChapterEntity>, dub: Boolean? = null) {
+         for (c in chapters) {
+-            if (c.downloaded || _progress.value.containsKey(c.id)) continue
+-            queue.addLast(Task(manga, c))
++            // an explicit sub/dub request may add the other language to an already downloaded episode
++            if ((c.downloaded && dub == null) || _progress.value.containsKey(c.id)) continue
++            queue.addLast(Task(manga, c, dub))
+             setProgress(c.id, 0)
+         }
+         startWorker()
+@@ -316,7 +320,7 @@
+             when {
+                 paused -> requeue = true
+                 cancelled -> {
+-                    ctx.app.storage.deleteDownload(task.manga, task.chapter)
++                    cleanupPartial(task)
+                 }
+                 else -> throw e
+             }
+@@ -328,7 +332,7 @@
+             if (paused) {
+                 requeue = true
+             } else {
+-                ctx.app.storage.deleteDownload(task.manga, task.chapter)
++                cleanupPartial(task)
+                 _errors.tryEmit("Download failed: ${task.chapter.name} (${e.message})")
+             }
+         } finally {
+@@ -351,6 +355,27 @@
+         }
+     }
+ 
++    /** Failed/cancelled download: remove only what this task wrote (an anime's other language must survive). */
++    private fun cleanupPartial(task: Task) {
++        if (ctx.app.sources.get(task.manga.source)?.isAnime == true) {
++            ctx.app.storage.chapterDir(task.manga, task.chapter, create = false)?.listFiles()
++                ?.filter { (it.name ?: "").startsWith(audioPrefix(task.dub)) }?.forEach { it.delete() }
++        } else {
++            ctx.app.storage.deleteDownload(task.manga, task.chapter)
++        }
++    }
++
++    /** Anime files: 001.* = sub (default), 002.* = dub. */
++    private fun audioPrefix(dub: Boolean?): String = if (dub == true) "002" else "001"
++
++    private suspend fun loadAnimeAudio(source: Source, task: Task, dub: Boolean): ChapterPages {
++        val episode = SChapter(url = task.chapter.url, name = task.chapter.name)
++        val option = source.getVideoOptions(episode).firstOrNull { it.dub == dub }
++            ?: if (dub) throw IOException("No dub available for ${task.chapter.name}") else null
++        return option?.resolve()
++            ?: source.loadPages(SManga(url = task.manga.url, title = task.manga.title), episode)
++    }
++
+     private suspend fun download(task: Task) {
+         val app = ctx.app
+         awaitIfResumed(task.chapter.id)
+@@ -360,15 +385,38 @@
+             return
+         }
+         val source = app.sources.get(task.manga.source) ?: throw IOException("Source not available")
+-        val loaded = source.loadPages(
+-            SManga(url = task.manga.url, title = task.manga.title),
+-            SChapter(url = task.chapter.url, name = task.chapter.name)
+-        )
++        val prefix = audioPrefix(task.dub)
++        if (source.isAnime && task.dub != null) {
++            val existing = app.storage.chapterDir(task.manga, task.chapter, create = false)
++            if (existing?.listFiles()?.any { (it.name ?: "").startsWith(prefix) } == true) {
++                app.db.chapterDao().setDownloaded(task.chapter.id, true)
++                return
++            }
++        }
++        val loaded = if (source.isAnime && task.dub != null) {
++            loadAnimeAudio(source, task, task.dub)
++        } else {
++            source.loadPages(
++                SManga(url = task.manga.url, title = task.manga.title),
++                SChapter(url = task.chapter.url, name = task.chapter.name)
++            )
++        }
+         val pages = loaded.urls
+         if (pages.isEmpty()) throw IOException("No pages found")
+         val dir = app.storage.chapterDir(task.manga, task.chapter, create = true)
+             ?: throw IOException("Cannot create download folder")
+-        dir.listFiles().forEach { it.delete() }
++        if (source.isAnime) {
++            dir.listFiles().filter { (it.name ?: "").startsWith(prefix) }.forEach { it.delete() }
++        } else {
++            dir.listFiles().forEach { it.delete() }
++        }
++        val nameOffset = if (source.isAnime && task.dub == true) 1 else 0
++
++        if (source.isAnime && pages.size == 1 && HlsDownloader.isHlsUrl(pages[0])) {
++            downloadHlsEpisode(task, loaded.headers, pages[0], dir, prefix)
++            app.db.chapterDao().setDownloaded(task.chapter.id, true)
++            return
++        }
+ 
+         val done = AtomicInteger(0)
+         val sem = Semaphore(3)
+@@ -378,7 +426,7 @@
+                     awaitIfResumed(task.chapter.id)
+                     sem.withPermit {
+                         awaitIfResumed(task.chapter.id)
+-                        downloadPage(task.chapter.id, loaded.headers, url, index, dir)
++                        downloadPage(task.chapter.id, loaded.headers, url, index + nameOffset, dir)
+                         setProgress(task.chapter.id, done.incrementAndGet() * 100 / pages.size)
+                     }
+                 }
+@@ -387,6 +435,37 @@
+         app.db.chapterDao().setDownloaded(task.chapter.id, true)
+     }
+ 
++    /** Anime episode served as HLS: all segments are merged into one playable file (001/002 .ts or .mp4). */
++    private suspend fun downloadHlsEpisode(
++        task: Task,
++        headers: Map<String, String>,
++        url: String,
++        dir: DocumentFile,
++        baseName: String
++    ) {
++        val chapterId = task.chapter.id
++        var created: DocumentFile? = null
++        try {
++            HlsDownloader.download(
++                client = ctx.app.network.client,
++                url = url,
++                headers = headers,
++                openOutput = { ext ->
++                    val file = dir.createFile(if (ext == "ts") "video/mp2t" else mimeForExt(ext), "$baseName.$ext")
++                        ?: throw IOException("Cannot create file")
++                    created = file
++                    ctx.contentResolver.openOutputStream(file.uri, "w")
++                        ?: throw IOException("Cannot open file for writing")
++                },
++                beforeSegment = { awaitIfResumed(chapterId) },
++                onProgress = { setProgress(chapterId, it) }
++            )
++        } catch (e: Exception) {
++            created?.delete()
++            throw e
++        }
++    }
++
+     private suspend fun downloadPage(
+         chapterId: Long,
+         headers: Map<String, String>,
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/HlsDownloader.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/HlsDownloader.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/HlsDownloader.kt	1970-01-01 00:00:00.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/download/HlsDownloader.kt	2026-11-07 09:05:52.389137086 +0000
+@@ -0,0 +1,146 @@
++package com.imperialreader.data.download
++
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.withContext
++import okhttp3.HttpUrl.Companion.toHttpUrl
++import okhttp3.OkHttpClient
++import okhttp3.Request
++import java.io.IOException
++import java.io.OutputStream
++import javax.crypto.Cipher
++import javax.crypto.spec.IvParameterSpec
++import javax.crypto.spec.SecretKeySpec
++
++/**
++ * Downloads an HLS (.m3u8) episode into ONE file: picks the best variant of a master playlist, fetches every
++ * segment (decrypting AES-128 when the playlist asks for it) and appends them in order. Plain MPEG-TS segments
++ * give a .ts file, fragmented-MP4 playlists (EXT-X-MAP) give a .mp4; both play in the anime player.
++ */
++internal object HlsDownloader {
++
++    fun isHlsUrl(url: String): Boolean =
++        url.substringBefore('?').substringBefore('#').endsWith(".m3u8", ignoreCase = true)
++
++    private class Key(val method: String, val uri: String?, val iv: String?)
++    private class Segment(val url: String, val key: Key?, val sequence: Long)
++
++    private val attrRegex = Regex("""([A-Z0-9-]+)=("[^"]*"|[^,]*)""")
++
++    private fun attrs(line: String): Map<String, String> =
++        attrRegex.findAll(line).associate { it.groupValues[1] to it.groupValues[2].trim().trim('"') }
++
++    private fun resolve(base: String, ref: String): String =
++        runCatching { base.toHttpUrl().resolve(ref)?.toString() }.getOrNull() ?: ref
++
++    suspend fun download(
++        client: OkHttpClient,
++        url: String,
++        headers: Map<String, String>,
++        openOutput: (extension: String) -> OutputStream,
++        beforeSegment: suspend () -> Unit,
++        onProgress: (Int) -> Unit
++    ) {
++        var playlistUrl = url
++        var text = fetchBytes(client, playlistUrl, headers).toString(Charsets.UTF_8)
++        if (!text.trimStart().startsWith("#EXTM3U")) throw IOException("Not an HLS playlist")
++        if (text.contains("#EXT-X-STREAM-INF")) {
++            playlistUrl = bestVariant(text, playlistUrl)
++            text = fetchBytes(client, playlistUrl, headers).toString(Charsets.UTF_8)
++        }
++
++        var initUrl: String? = null
++        var key: Key? = null
++        var sequence = 0L
++        val segments = ArrayList<Segment>()
++        for (raw in text.lineSequence()) {
++            val line = raw.trim()
++            when {
++                line.isEmpty() -> {}
++                line.startsWith("#EXT-X-MEDIA-SEQUENCE:") -> sequence = line.substringAfter(':').trim().toLongOrNull() ?: 0L
++                line.startsWith("#EXT-X-KEY:") -> {
++                    val a = attrs(line.substringAfter(':'))
++                    val method = a["METHOD"].orEmpty()
++                    key = if (method.equals("NONE", ignoreCase = true)) null else Key(method, a["URI"], a["IV"])
++                }
++                line.startsWith("#EXT-X-MAP:") -> initUrl = attrs(line.substringAfter(':'))["URI"]?.let { resolve(playlistUrl, it) }
++                line.startsWith("#") -> {}
++                else -> {
++                    segments += Segment(resolve(playlistUrl, line), key, sequence)
++                    sequence++
++                }
++            }
++        }
++        if (segments.isEmpty()) throw IOException("The playlist has no segments")
++
++        val keyCache = HashMap<String, ByteArray>()
++        openOutput(if (initUrl != null) "mp4" else "ts").use { out ->
++            initUrl?.let { out.write(fetchBytes(client, it, headers)) }
++            segments.forEachIndexed { index, seg ->
++                beforeSegment()
++                var data = fetchBytes(client, seg.url, headers)
++                val k = seg.key
++                if (k != null) {
++                    if (!k.method.equals("AES-128", ignoreCase = true)) {
++                        throw IOException("Unsupported HLS encryption: ${k.method}")
++                    }
++                    val keyUri = k.uri ?: throw IOException("HLS key without a URI")
++                    val keyBytes = keyCache.getOrPut(keyUri) { fetchBytes(client, resolve(playlistUrl, keyUri), headers) }
++                    val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
++                    cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes(k.iv, seg.sequence)))
++                    data = cipher.doFinal(data)
++                }
++                out.write(data)
++                onProgress((index + 1) * 100 / segments.size)
++            }
++        }
++    }
++
++    private fun bestVariant(master: String, base: String): String {
++        val lines = master.lines().map { it.trim() }
++        var bestBandwidth = -1L
++        var bestUrl: String? = null
++        for (i in lines.indices) {
++            if (!lines[i].startsWith("#EXT-X-STREAM-INF:")) continue
++            val bandwidth = attrs(lines[i].substringAfter(':'))["BANDWIDTH"]?.toLongOrNull() ?: 0L
++            val uri = lines.drop(i + 1).firstOrNull { it.isNotEmpty() && !it.startsWith("#") } ?: continue
++            if (bandwidth > bestBandwidth) {
++                bestBandwidth = bandwidth
++                bestUrl = resolve(base, uri)
++            }
++        }
++        return bestUrl ?: throw IOException("No playable variant in the master playlist")
++    }
++
++    private fun ivBytes(iv: String?, sequence: Long): ByteArray {
++        if (iv != null) {
++            val hex = iv.removePrefix("0x").removePrefix("0X").padStart(32, '0').takeLast(32)
++            return ByteArray(16) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
++        }
++        val out = ByteArray(16)
++        for (i in 0 until 8) out[15 - i] = (sequence shr (8 * i)).toByte()
++        return out
++    }
++
++    private suspend fun fetchBytes(client: OkHttpClient, url: String, headers: Map<String, String>): ByteArray {
++        var last: Exception? = null
++        repeat(3) { attempt ->
++            try {
++                return withContext(Dispatchers.IO) {
++                    val request = Request.Builder().url(url).apply { headers.forEach { (k, v) -> header(k, v) } }.build()
++                    client.newCall(request).execute().use { resp ->
++                        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
++                        resp.body!!.bytes()
++                    }
++                }
++            } catch (e: CancellationException) {
++                throw e
++            } catch (e: Exception) {
++                last = e
++                delay(800L * (attempt + 1))
++            }
++        }
++        throw last ?: IOException("Download failed")
++    }
++}
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/AnimeSources.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/AnimeSources.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/AnimeSources.kt	1970-01-01 00:00:00.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/AnimeSources.kt	2026-11-07 09:05:52.434093667 +0000
+@@ -0,0 +1,473 @@
++package com.imperialreader.data.source
++
++import kotlinx.coroutines.CancellationException
++import org.json.JSONArray
++import org.json.JSONObject
++import org.jsoup.Jsoup
++import org.jsoup.nodes.Document
++import org.jsoup.nodes.Element
++import java.io.IOException
++import java.net.URI
++
++/*
++ * Anime sources (Aniyomi-style mapping onto the existing manga contract):
++ *
++ *   Aniyomi AnimeHttpSource            ->  this app
++ *   ---------------------------------      ---------------------------------------------
++ *   SAnime                             ->  SManga      (a "title" = one anime)
++ *   SEpisode                           ->  SChapter    (a "chapter" = one episode)
++ *   popularAnimeRequest/Parse          ->  getPopular()
++ *   latestUpdatesRequest/Parse         ->  getLatest()
++ *   searchAnimeRequest/Parse           ->  search()
++ *   animeDetailsParse                  ->  getMangaDetails()
++ *   episodeListParse                   ->  getChapters()   (newest first, like every other source here)
++ *   videoListParse (+ Video.headers)   ->  loadEpisode()   (one playable URL + its headers, played by the reader's video page)
++ *
++ * The reader already plays a single MP4 "page"; PageAdapter was extended to also accept .m3u8 (HLS).
++ * Nothing else in the reader/database/library code is aware of anime: it is just a source with isAnime = true.
++ */
++
++/** Dean Edwards p.a.c.k.e.r unpacker: many embed players hide their stream URL inside one of these. */
++internal object PackedJs {
++    private const val ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
++    private val packed = Regex("""\}\('((?:[^'\\]|\\.)*)',\s*(\d+),\s*(\d+),\s*'((?:[^'\\]|\\.)*)'\.split\('\|'\)""")
++    private val token = Regex("""\b\w+\b""")
++
++    private fun decode(value: String, radix: Int): Int? {
++        var n = 0
++        for (ch in value) {
++            val digit = ALPHABET.indexOf(ch)
++            if (digit < 0 || digit >= radix) return null
++            n = n * radix + digit
++        }
++        return n
++    }
++
++    fun unpackAll(js: String): List<String> = packed.findAll(js).mapNotNull { m ->
++        val payload = m.groupValues[1].replace("\\'", "'").replace("\\\\", "\\")
++        val radix = m.groupValues[2].toIntOrNull()?.takeIf { it in 2..62 } ?: return@mapNotNull null
++        val words = m.groupValues[4].split("|")
++        token.replace(payload) { t ->
++            val index = decode(t.value, radix)
++            words.getOrNull(index ?: -1)?.takeIf { it.isNotEmpty() } ?: t.value
++        }
++    }.toList()
++}
++
++private val STREAM_REGEX =
++    Regex("""https?://[^\s"'<>\\)]+?\.(?:m3u8|mp4)(?:\?[^\s"'<>\\)]*)?""", RegexOption.IGNORE_CASE)
++private val EMBED_REGEX =
++    Regex("""https?://[^\s"'<>\\]+/(?:v|e|embed|player)/[A-Za-z0-9_\-]{6,}[^\s"'<>\\]*""", RegexOption.IGNORE_CASE)
++
++internal fun findStreamUrl(text: String): String? {
++    val cleaned = text.replace("\\/", "/").replace("&amp;", "&")
++    val all = STREAM_REGEX.findAll(cleaned).map { it.value }.toList()
++    return all.firstOrNull { it.contains(".m3u8", ignoreCase = true) } ?: all.firstOrNull()
++}
++
++private fun formatNumber(n: Float): String = if (n % 1f == 0f) n.toInt().toString() else n.toString()
++
++abstract class AnimeHttpSource : HttpSource() {
++    override val lang: String get() = "en"
++    override val isAnime: Boolean get() = true
++
++    /** Implemented per site: return the playable URL of one episode plus the headers the player must send. */
++    protected abstract suspend fun loadEpisode(episode: SChapter): ChapterPages
++
++    override suspend fun getPages(chapter: SChapter): List<String> = loadEpisode(chapter).urls
++
++    /**
++     * SUB / DUB servers listed on the episode page (buttons carrying an embed URL in a data-* attribute).
++     * UNVERIFIED against the live markup: when no such buttons are found only the page's default player is offered.
++     */
++    override suspend fun getVideoOptions(chapter: SChapter): List<VideoOption> {
++        val doc = Jsoup.parse(getString(chapter.url, mapOf("Referer" to "$baseUrl/")), chapter.url)
++        val found = parseServers(doc, chapter.url)
++        val options = found.map { s -> VideoOption(s.label, s.dub) { resolveEmbed(s.url, chapter.url) } }
++        val default = VideoOption("Default", false) { loadEpisode(chapter) }
++        return if (options.any { !it.dub }) options else listOf(default) + options
++    }
++
++    private class ServerLink(val label: String, val dub: Boolean, val url: String)
++
++    private fun parseServers(doc: Document, pageUrl: String): List<ServerLink> {
++        val urlAttrs = listOf("data-embed", "data-link", "data-video", "data-url", "data-src", "data-server")
++        val skipTags = setOf("img", "iframe", "script", "source", "video", "link", "meta")
++        val out = LinkedHashMap<String, ServerLink>()
++        for (el in doc.select(urlAttrs.joinToString(",") { "[$it]" })) {
++            if (el.tagName() in skipTags || navigationChrome(el)) continue
++            val raw = urlAttrs.map { el.attr(it).trim() }
++                .firstOrNull { it.startsWith("http") || it.startsWith("//") || it.startsWith("/") } ?: continue
++            val url = runCatching { URI(pageUrl).resolve(raw).toString() }.getOrNull() ?: continue
++            if (url in out) continue
++            val signals = buildString {
++                append(el.text()).append(' ')
++                el.attributes().forEach { append(it.value).append(' ') }
++                el.parent()?.let { p ->
++                    append(p.ownText()).append(' ')
++                    p.attributes().forEach { append(it.value).append(' ') }
++                    p.previousElementSibling()?.text()?.takeIf { it.length <= 20 }?.let { append(it) }
++                }
++            }.lowercase()
++            val dub = "dub" in signals
++            val text = el.text().trim().ifBlank { "Server ${out.size + 1}" }
++            out[url] = ServerLink((if (dub) "DUB " else "SUB ") + text, dub, url)
++        }
++        return out.values.toList()
++    }
++
++    override suspend fun loadPages(manga: SManga, chapter: SChapter): ChapterPages = loadEpisode(chapter)
++
++    protected fun originOf(url: String): String =
++        runCatching { URI(url).let { "${it.scheme}://${it.authority}" } }.getOrDefault(baseUrl)
++
++    /**
++     * Opens an episode/embed page and looks for a direct stream: plain HTML first, then unpacked scripts, then
++     * nested iframes / data-* embed links (up to two levels, each sent with the previous page as Referer).
++     */
++    protected suspend fun resolveEmbed(pageUrl: String, referer: String, depth: Int = 0): ChapterPages {
++        val html = try {
++            getString(pageUrl, mapOf("Referer" to referer))
++        } catch (e: CancellationException) {
++            throw e
++        } catch (_: Exception) {
++            null // some embeds refuse plain requests; the WebView fallback below can still load them
++        }
++        var triedNested = false
++        if (html != null) {
++            for (text in listOf(html) + PackedJs.unpackAll(html)) {
++                val stream = findStreamUrl(text) ?: continue
++                val origin = originOf(pageUrl)
++                return ChapterPages(listOf(stream), mapOf("Referer" to "$origin/", "Origin" to origin))
++            }
++            if (depth < 2) {
++                val doc = Jsoup.parse(html, pageUrl)
++                val next = LinkedHashSet<String>()
++                doc.select("iframe[src], iframe[data-src]").forEach {
++                    next += it.absUrl("src").ifBlank { it.absUrl("data-src") }
++                }
++                doc.select("[data-embed], [data-video], [data-url], [data-link]").forEach { el ->
++                    listOf("data-embed", "data-video", "data-url", "data-link")
++                        .map { el.absUrl(it) }.filter { it.startsWith("http") }.forEach { next += it }
++                }
++                EMBED_REGEX.findAll(html.replace("\\/", "/")).forEach { next += it.value }
++                for (candidate in next.filter { it.startsWith("http") && it != pageUrl }) {
++                    triedNested = true
++                    try {
++                        return resolveEmbed(candidate, pageUrl, depth + 1)
++                    } catch (e: CancellationException) {
++                        throw e
++                    } catch (_: Exception) {
++                        // try the next embed
++                    }
++                }
++            }
++        }
++        // Last resort: run the page in a hidden WebView and watch for the stream request (JS/encrypted players).
++        if (depth > 0 || !triedNested) {
++            WebViewStream.load(pageUrl, referer)?.stream?.let { return it }
++        }
++        throw IOException("$name: no playable stream found on ${originOf(pageUrl)}")
++    }
++
++    /** Search endpoints differ between clones of the same theme, so try the usual query parameter names. */
++    protected suspend fun searchWithFallbacks(
++        path: String,
++        query: String,
++        page: Int,
++        parse: (String, Int) -> MangasPage
++    ): MangasPage {
++        val q = query.trim()
++        if (q.isEmpty()) return MangasPage(emptyList(), false)
++        var last: MangasPage = MangasPage(emptyList(), false)
++        for (key in listOf("keyword", "q", "s")) {
++            val html = try {
++                getString("$baseUrl$path${if ('?' in path) '&' else '?'}$key=${enc(q)}&page=$page")
++            } catch (e: HttpStatusException) {
++                if (e.code == 404) continue else throw e
++            }
++            val result = parse(html, page)
++            if (result.mangas.isNotEmpty()) return result
++            last = result
++        }
++        return last
++    }
++
++    // ---- shared card helpers
++    protected fun cardBox(a: Element): Element =
++        a.takeIf { it.selectFirst("img") != null }
++            ?: a.parents().firstOrNull { it.selectFirst("img") != null && it.select("a[href]").size <= 4 }
++            ?: a
++
++    protected fun cardTitle(a: Element, box: Element): String =
++        listOf(
++            a.attr("title"),
++            box.selectFirst("img[alt]")?.attr("alt"),
++            box.selectFirst(".title, .name, .film-name, h2, h3, h4, h5")?.text(),
++            a.text()
++        ).map { it?.trim().orEmpty().removePrefix("Poster of ").trim() }.firstOrNull { it.isNotBlank() }.orEmpty()
++
++    protected fun hasNextPage(doc: Document, page: Int): Boolean =
++        doc.select("a[rel=next], a[title=Next]").isNotEmpty() ||
++            doc.select("a[href]").any {
++                val h = it.attr("href")
++                h.endsWith("/page/${page + 1}") || h.endsWith("/page/${page + 1}/") || h.contains("page=${page + 1}")
++            }
++
++    protected fun navigationChrome(el: Element): Boolean =
++        el.parents().any { it.tagName() in setOf("nav", "header", "footer") || it.hasClass("dropdown-menu") || it.hasClass("navbar") }
++}
++
++/** https://9anime.si — /anime/<slug> pages, episodes at /watch/<slug>-episode-N, player is an iframe embed. */
++class NineAnimeSource : AnimeHttpSource() {
++    override val id = "nineanime_si"
++    override val name = "9anime"
++    override val baseUrl = "https://9anime.si"
++
++    // Browse-all list. The site's own pager links look like /search?url=search&page=2, so use exactly that form.
++    override suspend fun getPopular(page: Int): MangasPage =
++        listing(if (page <= 1) "$baseUrl/search" else "$baseUrl/search?url=search&page=$page", page)
++
++    override suspend fun getLatest(page: Int): MangasPage =
++        listing(if (page <= 1) "$baseUrl/home" else "$baseUrl/page/$page", page)
++
++    override suspend fun search(query: String, page: Int): MangasPage =
++        searchWithFallbacks("/search?url=search", query, page) { html, p -> parseListing(html, p) }
++
++    private suspend fun listing(url: String, page: Int): MangasPage {
++        val html = try {
++            getString(url)
++        } catch (e: HttpStatusException) {
++            if (e.code == 404 && page > 1) return MangasPage(emptyList(), false)
++            throw e
++        }
++        return parseListing(html, page)
++    }
++
++    private fun parseListing(html: String, page: Int): MangasPage {
++        val doc = Jsoup.parse(html, baseUrl)
++        val found = LinkedHashMap<String, SManga>()
++        for (a in doc.select("a[href*=/anime/], a[href*=/watch/]")) {
++            if (navigationChrome(a)) continue
++            val slug = SLUG.find(a.absUrl("href"))?.groupValues?.get(1)?.replace(EPISODE_SUFFIX, "") ?: continue
++            val box = cardBox(a)
++            val title = cardTitle(a, box)
++            val url = "$baseUrl/anime/$slug"
++            val thumb = lazyImage(box.selectFirst("img"))
++            val existing = found[url]
++            if (existing == null) {
++                if (title.isNotBlank()) found[url] = SManga(url = url, title = title, thumbnailUrl = thumb)
++            } else if (existing.thumbnailUrl == null && thumb != null) {
++                existing.thumbnailUrl = thumb
++            }
++        }
++        return MangasPage(found.values.toList(), found.isNotEmpty() && hasNextPage(doc, page))
++    }
++
++    override suspend fun getMangaDetails(manga: SManga): SManga {
++        val doc = Jsoup.parse(getString(manga.url), manga.url)
++        doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }?.let { manga.title = it }
++        manga.thumbnailUrl = doc.selectFirst("meta[property=og:image]")?.absUrl("content")?.takeIf { it.isNotBlank() }
++            ?: manga.thumbnailUrl
++        manga.description = doc.selectFirst(".synopsis, .description, #synopsis, [class*=synopsis]")?.text()?.trim()
++            ?.takeIf { it.isNotBlank() } ?: manga.description
++        val genres = doc.select("a[href*=search?genre=]").filterNot(::navigationChrome).map { it.text().trim() }
++            .filter { it.isNotBlank() }.distinct()
++        if (genres.isNotEmpty()) manga.genre = genres.joinToString(", ")
++        val text = doc.text()
++        Regex("""Studios?:\s*(.+?)\s+(?:Director|Producers?)""").find(text)?.groupValues?.get(1)?.trim()
++            ?.takeIf { it.isNotBlank() }?.let { manga.author = it }
++        Regex("""Status:\s*(\w+)""").find(text)?.groupValues?.get(1)?.let { manga.status = statusFromText(it) }
++        return manga
++    }
++
++    override suspend fun getChapters(manga: SManga): List<SChapter> {
++        val slug = manga.url.substringAfter("/anime/").substringBefore('/').substringBefore('?')
++        val doc = Jsoup.parse(getString(manga.url), manga.url)
++        val episodes = doc.select("a[href*=/watch/$slug-episode-]").mapNotNull { a ->
++            val url = a.absUrl("href").substringBefore('#').substringBefore('?')
++            val n = EPISODE_NUMBER.find(url)?.groupValues?.get(1)?.toFloatOrNull() ?: return@mapNotNull null
++            SChapter(url = url, name = "Episode ${formatNumber(n)}", chapterNumber = n)
++        }.distinctBy { it.url }.sortedByDescending { it.chapterNumber }
++        if (episodes.isEmpty()) throw IOException("9anime: no episodes found for this title")
++        return episodes
++    }
++
++    /** The episode page lists "SUB: HD-1" and "DUB: DUB-1"; the dub is reached by clicking its button in a hidden WebView. */
++    override suspend fun getVideoOptions(chapter: SChapter): List<VideoOption> {
++        val html = getString(chapter.url, mapOf("Referer" to "$baseUrl/"))
++        val text = Jsoup.parse(html, chapter.url).text()
++        val options = ArrayList<VideoOption>()
++        for (group in SERVER_GROUP.findAll(text)) {
++            val dub = group.groupValues[1].equals("DUB", ignoreCase = true)
++            for (token in SERVER_TOKEN.findAll(group.groupValues[2])) {
++                val label = token.value
++                val isDefault = !dub && options.none { !it.dub }
++                options += VideoOption((if (dub) "DUB " else "SUB ") + label, dub) {
++                    if (isDefault) loadEpisode(chapter) else resolveViaClick(chapter, label)
++                }
++            }
++        }
++        if (options.none { !it.dub }) options.add(0, VideoOption("SUB Default", false) { loadEpisode(chapter) })
++        return options
++    }
++
++    private suspend fun resolveViaClick(chapter: SChapter, label: String): ChapterPages {
++        val found = WebViewStream.load(chapter.url, "$baseUrl/", clickLabel = label, timeoutMs = 30_000)
++            ?: throw IOException("9anime: couldn't switch to $label")
++        found.stream?.let { return it }
++        val embed = found.embedUrl ?: throw IOException("9anime: $label returned no player")
++        return resolveEmbed(embed, chapter.url)
++    }
++
++    override suspend fun loadEpisode(episode: SChapter): ChapterPages = resolveEmbed(episode.url, "$baseUrl/")
++
++    private companion object {
++        val SLUG = Regex("""/(?:anime|watch)/([^/?#]+)""")
++        val EPISODE_SUFFIX = Regex("""-episode-\d+(?:\.\d+)?$""")
++        val EPISODE_NUMBER = Regex("""-episode-(\d+(?:\.\d+)?)/?$""")
++        val SERVER_GROUP = Regex("""\b(SUB|DUB):((?:\s*[A-Za-z]+-\d+)+)""")
++        val SERVER_TOKEN = Regex("""[A-Za-z]+-\d+""")
++    }
++}
++
++/**
++ * https://animepahetv.to — /anime/<32-char id>. The episode list is NOT in the static HTML ("Episodes (0)", filled by
++ * JavaScript), so getChapters() first looks for episode links in the page, then asks [EPISODE_ENDPOINTS].
++ * UNVERIFIED: open an anime page in a desktop browser, DevTools > Network > Fetch/XHR, and put the real
++ * request path (with {id}) first in [EPISODE_ENDPOINTS].
++ */
++class AnimePaheTvSource : AnimeHttpSource() {
++    override val id = "animepahetv_to"
++    override val name = "AnimePahe"
++    override val baseUrl = "https://animepahetv.to"
++
++    override suspend fun getPopular(page: Int): MangasPage = listing("$baseUrl/az-list/?page=$page", page)
++
++    override suspend fun getLatest(page: Int): MangasPage = listing("$baseUrl/latest-updated?page=$page", page)
++
++    override suspend fun search(query: String, page: Int): MangasPage =
++        searchWithFallbacks("/search", query, page) { html, p -> parseListing(html, p) }
++
++    private suspend fun listing(url: String, page: Int): MangasPage {
++        val html = try {
++            getString(url)
++        } catch (e: HttpStatusException) {
++            if (e.code == 404 && page > 1) return MangasPage(emptyList(), false)
++            throw e
++        }
++        return parseListing(html, page)
++    }
++
++    private fun parseListing(html: String, page: Int): MangasPage {
++        val doc = Jsoup.parse(html, baseUrl)
++        val found = LinkedHashMap<String, SManga>()
++        for (a in doc.select("a[href*=/anime/]")) {
++            if (navigationChrome(a)) continue
++            val id = ANIME_ID.find(a.absUrl("href"))?.groupValues?.get(1) ?: continue
++            val url = "$baseUrl/anime/$id"
++            val box = cardBox(a)
++            val title = cardTitle(a, box)
++            val thumb = lazyImage(box.selectFirst("img"))
++            val existing = found[url]
++            if (existing == null) {
++                found[url] = SManga(url = url, title = title, thumbnailUrl = thumb)
++            } else {
++                if (existing.title.isBlank() && title.isNotBlank()) existing.title = title
++                if (existing.thumbnailUrl == null && thumb != null) existing.thumbnailUrl = thumb
++            }
++        }
++        val items = found.values.filter { it.title.isNotBlank() }
++        return MangasPage(items, items.isNotEmpty() && hasNextPage(doc, page))
++    }
++
++    override suspend fun getMangaDetails(manga: SManga): SManga {
++        val doc = Jsoup.parse(getString(manga.url), manga.url)
++        doc.selectFirst("h1")?.ownText()?.trim()?.takeIf { it.isNotBlank() }?.let { manga.title = it }
++        manga.thumbnailUrl = doc.selectFirst("img[alt^=Poster of]")?.absUrl("src")?.takeIf { it.isNotBlank() }
++            ?: doc.selectFirst("meta[property=og:image]")?.absUrl("content")?.takeIf { it.isNotBlank() }
++            ?: manga.thumbnailUrl
++        doc.select("p").filterNot(::navigationChrome).map { it.text().trim() }.maxByOrNull { it.length }
++            ?.takeIf { it.length > 60 }?.let { manga.description = it }
++        val genres = doc.select("a[href*=/genre/]").filterNot(::navigationChrome).map { it.text().trim() }
++            .filter { it.isNotBlank() }.distinct()
++        if (genres.isNotEmpty()) manga.genre = genres.joinToString(", ")
++        doc.selectFirst("a[href*=/studio/]")?.text()?.trim()?.takeIf { it.isNotBlank() && !it.equals("unknown", true) }
++            ?.let { manga.author = it }
++        val statusText = Regex("""Status:\s*(Finished Airing|Currently Airing|Not yet aired)""", RegexOption.IGNORE_CASE)
++            .find(doc.text())?.groupValues?.get(1).orEmpty().lowercase()
++        manga.status = when {
++            "currently" in statusText -> 1
++            "finished" in statusText -> 2
++            else -> manga.status
++        }
++        return manga
++    }
++
++    override suspend fun getChapters(manga: SManga): List<SChapter> {
++        val animeId = ANIME_ID.find(manga.url)?.groupValues?.get(1) ?: throw IOException("AnimePahe: bad title URL")
++        val fromPage = parseEpisodeLinks(Jsoup.parse(getString(manga.url), manga.url), animeId)
++        if (fromPage.isNotEmpty()) return fromPage
++        var lastError: Exception? = null
++        for (template in EPISODE_ENDPOINTS) {
++            try {
++                val episodes = parseEpisodeResponse(getString(template.replace("{id}", animeId)), animeId)
++                if (episodes.isNotEmpty()) return episodes
++            } catch (e: CancellationException) {
++                throw e
++            } catch (e: Exception) {
++                lastError = e
++            }
++        }
++        throw IOException(
++            "AnimePahe: the episode list is loaded by the site's JavaScript and no known endpoint answered " +
++                "(set the real one in EPISODE_ENDPOINTS)." + (lastError?.message?.let { " Last error: $it" } ?: "")
++        )
++    }
++
++    private fun parseEpisodeLinks(doc: Document, animeId: String): List<SChapter> =
++        doc.select("a[href*=/watch/], a[href*=/episode/], a[data-episode], a[data-id]").mapNotNull { a ->
++            val url = a.absUrl("href").substringBefore('#')
++            if (!url.startsWith("http") || url.contains("/anime/")) return@mapNotNull null
++            episodeOf(url, a.text(), a.attr("data-episode"))
++        }.distinctBy { it.url }.sortedByDescending { it.chapterNumber }
++
++    private fun episodeOf(url: String, label: String, hint: String = ""): SChapter? {
++        val n = listOf(hint, label, url).mapNotNull { Regex("""(\d+(?:\.\d+)?)(?!.*\d)""").find(it)?.groupValues?.get(1)?.toFloatOrNull() }
++            .firstOrNull() ?: return null
++        return SChapter(url = url, name = "Episode ${formatNumber(n)}", chapterNumber = n)
++    }
++
++    private fun parseEpisodeResponse(body: String, animeId: String): List<SChapter> {
++        val trimmed = body.trim()
++        val html = when {
++            trimmed.startsWith("{") -> JSONObject(trimmed).optString("html").ifBlank { trimmed }
++            trimmed.startsWith("[") -> {
++                val array = JSONArray(trimmed)
++                return (0 until array.length()).mapNotNull { i ->
++                    val o = array.optJSONObject(i) ?: return@mapNotNull null
++                    val ref = listOf("url", "link", "session", "slug", "id").map { o.optString(it) }.firstOrNull { it.isNotBlank() }
++                        ?: return@mapNotNull null
++                    val url = if (ref.startsWith("http")) ref else "$baseUrl/watch/$animeId/$ref"
++                    val label = listOf("title", "name", "episode", "number").map { o.optString(it) }.firstOrNull { it.isNotBlank() }.orEmpty()
++                    episodeOf(url, label, o.optString("episode"))
++                }.distinctBy { it.url }.sortedByDescending { it.chapterNumber }
++            }
++            else -> trimmed
++        }
++        return parseEpisodeLinks(Jsoup.parse(html, baseUrl), animeId)
++    }
++
++    override suspend fun loadEpisode(episode: SChapter): ChapterPages = resolveEmbed(episode.url, "$baseUrl/")
++
++    private companion object {
++        val ANIME_ID = Regex("""/anime/([0-9a-fA-F]{32})""")
++
++        /** UNVERIFIED guesses (common for this kind of site). Replace with the request seen in the browser's Network tab. */
++        val EPISODE_ENDPOINTS = listOf(
++            "https://animepahetv.to/ajax/episode/list/{id}",
++            "https://animepahetv.to/ajax/episodes/{id}",
++            "https://animepahetv.to/api/episodes/{id}"
++        )
++    }
++}
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/Source.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/Source.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/Source.kt	2026-11-07 02:13:30.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/Source.kt	2026-11-07 03:40:20.316660641 +0000
+@@ -36,6 +36,9 @@
+     val audioUrl: String? = null
+ )
+ 
++/** One way to watch an episode (e.g. a SUB or DUB server). The stream is only resolved when the option is picked. */
++data class VideoOption(val label: String, val dub: Boolean, val resolve: suspend () -> ChapterPages)
++
+ /** Contract every built-in or custom source implements. */
+ interface Source {
+     val id: String
+@@ -46,6 +49,9 @@
+     /** Adult (18+) site: hidden unless "Show 18+" is enabled in Settings. */
+     val nsfw: Boolean get() = false
+ 
++    /** Video source: a title is an anime and its "chapters" are episodes. Only changes wording and the player. */
++    val isAnime: Boolean get() = false
++
+     suspend fun getPopular(page: Int): MangasPage
+     suspend fun getLatest(page: Int): MangasPage
+     suspend fun search(query: String, page: Int): MangasPage
+@@ -96,6 +102,9 @@
+         return MangasPage(matches, popular.hasNextPage)
+     }
+     suspend fun getChapters(manga: SManga): List<SChapter>
++
++    /** Anime sources: the sub/dub servers of one episode. Empty = fall back to [loadPages]. */
++    suspend fun getVideoOptions(chapter: SChapter): List<VideoOption> = emptyList()
+     suspend fun getPages(chapter: SChapter): List<String>
+ 
+     /** Same as [getPages] but also returns the image headers. Combined sources override this. */
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/SourceManager.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/SourceManager.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/SourceManager.kt	2026-11-07 03:01:36.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/SourceManager.kt	2026-11-07 03:37:12.008721648 +0000
+@@ -57,6 +57,9 @@
+         PawchiveSource(),
+         ManhwaFanSource(),
+         SfmCompileSource(),
++        // Anime (titles = anime, chapters = episodes)
++        NineAnimeSource(),
++        AnimePaheTvSource(),
+         // Western comics
+         WordPressSource("TritiniaScans", "https://tritinia.org"),
+         WordPressSource("VortexScans", "https://vortexscans.org"),
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/WebViewStream.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/WebViewStream.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/WebViewStream.kt	1970-01-01 00:00:00.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/data/source/WebViewStream.kt	2026-11-07 09:06:12.162812395 +0000
+@@ -0,0 +1,166 @@
++package com.imperialreader.data.source
++
++import android.annotation.SuppressLint
++import android.os.Handler
++import android.os.Looper
++import android.webkit.CookieManager
++import android.webkit.WebResourceRequest
++import android.webkit.WebResourceResponse
++import android.webkit.WebView
++import android.webkit.WebViewClient
++import com.imperialreader.App
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.suspendCancellableCoroutine
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.withTimeoutOrNull
++import org.json.JSONArray
++import org.json.JSONObject
++import org.json.JSONTokener
++import java.net.URI
++import java.util.concurrent.atomic.AtomicBoolean
++import kotlin.coroutines.resume
++
++/** Result of running a page in a hidden WebView: a stream request that was seen, or an iframe URL that appeared. */
++internal class WebFound(val stream: ChapterPages?, val embedUrl: String?)
++
++/**
++ * Last-resort stream discovery for players that build their stream with JavaScript (this is what Aniyomi
++ * extensions do with a WebView resolver). The page is loaded invisibly, every request it makes is inspected,
++ * and the first .m3u8 / .mp4 request is returned together with the Referer/Origin the player used.
++ *
++ * With [clickLabel] it instead clicks the server button with that exact text (e.g. "DUB-1") and returns the
++ * iframe URL the page switches to (or a stream request that follows the click).
++ */
++internal object WebViewStream {
++    private val main = Handler(Looper.getMainLooper())
++
++    private const val AUTOPLAY_JS =
++        "(function(){try{var v=document.querySelector('video');if(v){v.muted=true;var p=v.play();if(p&&p.catch)p.catch(function(){});}" +
++            "['.jw-icon-display','.vjs-big-play-button','.plyr__control--overlaid','.play-button','#play','[aria-label=Play]','.jwplayer','#player']" +
++            ".forEach(function(s){var e=document.querySelector(s);if(e){try{e.click();}catch(x){}}});}catch(e){}})();"
++
++    private const val IFRAMES_JS =
++        "(function(){var f=document.querySelectorAll('iframe');var r=[];" +
++            "for(var i=0;i<f.length;i++){r.push(f[i].src||f[i].getAttribute('data-src')||'');}return JSON.stringify(r);})();"
++
++    private fun clickJs(label: String): String =
++        "(function(){var want=" + JSONObject.quote(label) + ".toLowerCase();" +
++            "var els=document.querySelectorAll('a,button,div,span,li,label');" +
++            "for(var i=0;i<els.length;i++){var e=els[i];" +
++            "if(e.children.length===0&&(e.textContent||'').trim().toLowerCase()===want){e.click();return true;}}return false;})();"
++
++    private fun isStream(url: String): Boolean {
++        val path = url.substringBefore('?').substringBefore('#').lowercase()
++        if (path.endsWith(".m3u8")) return true
++        if (!path.endsWith(".mp4")) return false
++        val name = path.substringAfterLast('/')
++        return listOf("ad", "ads", "promo", "banner", "preroll").none { name.startsWith(it) || "/$it/" in path }
++    }
++
++    private fun originOf(url: String): String =
++        runCatching { URI(url).let { "${it.scheme}://${it.authority}" } }.getOrDefault(url)
++
++    private fun parseUrls(raw: String?): List<String> = runCatching {
++        val decoded = JSONTokener(raw ?: return emptyList()).nextValue() as? String ?: return emptyList()
++        val array = JSONArray(decoded)
++        (0 until array.length()).map { array.optString(it) }
++    }.getOrDefault(emptyList())
++
++    @SuppressLint("SetJavaScriptEnabled")
++    suspend fun load(
++        pageUrl: String,
++        referer: String,
++        clickLabel: String? = null,
++        timeoutMs: Long = 25_000
++    ): WebFound? = withTimeoutOrNull(timeoutMs) {
++        withContext(Dispatchers.Main) {
++            suspendCancellableCoroutine<WebFound?> { cont ->
++                val app = App.instance
++                val ua = app.network.userAgent
++                val wv = WebView(app)
++                val done = AtomicBoolean(false)
++                val clicked = AtomicBoolean(clickLabel == null)
++                var started = false
++                var initial: List<String> = emptyList()
++                val pageHost = runCatching { URI(pageUrl).host }.getOrNull()
++
++                fun destroy() = main.post { runCatching { wv.stopLoading(); wv.destroy() } }
++                fun finish(result: WebFound?) {
++                    if (!done.compareAndSet(false, true)) return
++                    destroy()
++                    if (cont.isActive) cont.resume(result)
++                }
++                cont.invokeOnCancellation {
++                    done.set(true)
++                    destroy()
++                }
++
++                wv.settings.apply {
++                    javaScriptEnabled = true
++                    domStorageEnabled = true
++                    mediaPlaybackRequiresUserGesture = false
++                    userAgentString = ua
++                    blockNetworkImage = true
++                    javaScriptCanOpenWindowsAutomatically = false
++                }
++                CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
++
++                fun poll(attempt: Int) {
++                    if (done.get()) return
++                    wv.evaluateJavascript(IFRAMES_JS) { raw ->
++                        val changed = parseUrls(raw).firstOrNull { it.startsWith("http") && it !in initial }
++                        when {
++                            changed != null -> finish(WebFound(null, changed))
++                            attempt >= 12 -> finish(null)
++                            else -> main.postDelayed({ poll(attempt + 1) }, 700)
++                        }
++                    }
++                }
++
++                wv.webViewClient = object : WebViewClient() {
++                    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
++                        val url = request.url.toString()
++                        if (clicked.get() && isStream(url)) {
++                            val headers = request.requestHeaders
++                            val ref = headers["Referer"] ?: headers["referer"] ?: pageUrl
++                            val origin = headers["Origin"] ?: headers["origin"] ?: originOf(ref)
++                            finish(
++                                WebFound(
++                                    ChapterPages(listOf(url), mapOf("Referer" to ref, "Origin" to origin, "User-Agent" to ua)),
++                                    null
++                                )
++                            )
++                        }
++                        return null
++                    }
++
++                    // keep ad redirects away from the hidden page
++                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
++                        request.url.host != pageHost
++
++                    override fun onPageFinished(view: WebView, url: String?) {
++                        if (started) return
++                        started = true
++                        if (clickLabel == null) {
++                            listOf(0L, 1500L, 4000L, 8000L).forEach { delay ->
++                                main.postDelayed({ if (!done.get()) view.evaluateJavascript(AUTOPLAY_JS, null) }, delay)
++                            }
++                        } else {
++                            main.postDelayed({
++                                if (done.get()) return@postDelayed
++                                view.evaluateJavascript(IFRAMES_JS) { before ->
++                                    initial = parseUrls(before)
++                                    clicked.set(true)
++                                    view.evaluateJavascript(clickJs(clickLabel)) { hit ->
++                                        if (hit == "true") poll(0) else finish(null)
++                                    }
++                                }
++                            }, 1500)
++                        }
++                    }
++                }
++                wv.loadUrl(pageUrl, mapOf("Referer" to referer))
++            }
++        }
++    }
++}
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/browse/SourcesFragment.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/browse/SourcesFragment.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/browse/SourcesFragment.kt	2026-11-06 23:44:56.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/browse/SourcesFragment.kt	2026-11-07 03:37:12.008890748 +0000
+@@ -128,7 +128,7 @@
+             val off = s.id in disabled
+             h.icon.text = s.name.take(1).uppercase()
+             h.name.text = s.name
+-            h.lang.text = s.lang.uppercase() + (if (s.nsfw) " • 18+" else "") + (if (off) " • disabled" else "")
++            h.lang.text = s.lang.uppercase() + (if (s.isAnime) " • ANIME" else "") + (if (s.nsfw) " • 18+" else "") + (if (off) " • disabled" else "")
+             h.itemView.alpha = if (off) 0.4f else 1f
+             h.itemView.setOnClickListener { onOpen(s, false) }
+             h.itemView.setOnLongClickListener { onLong(s); true }
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/details/MangaDetailsActivity.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/details/MangaDetailsActivity.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/details/MangaDetailsActivity.kt	2026-11-07 02:51:10.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/details/MangaDetailsActivity.kt	2026-11-07 09:10:13.654692326 +0000
+@@ -259,10 +259,11 @@
+         }
+         fab.visibility = View.VISIBLE
+         val anyProgress = ordered.any { it.read || it.lastPageRead > 0 }
++        val anime = manga?.let { app.sources.get(it.source)?.isAnime } == true
+         fab.text = when {
+-            ordered.all { it.read } -> "Read again"
++            ordered.all { it.read } -> if (anime) "Watch again" else "Read again"
+             anyProgress -> "Resume"
+-            else -> "Start"
++            else -> if (anime) "Watch" else "Start"
+         }
+     }
+ 
+@@ -679,6 +680,18 @@
+         lifecycleScope.launch { app.db.chapterDao().setRead(ids, read) }
+     }
+ 
++    /** Anime sources only: ask for sub or dub before queuing; every other source passes null straight through. */
++    private fun withAudioChoice(m: MangaEntity, action: (dub: Boolean?) -> Unit) {
++        if (app.sources.get(m.source)?.isAnime != true) {
++            action(null)
++            return
++        }
++        MaterialAlertDialogBuilder(this)
++            .setTitle("Download as")
++            .setItems(arrayOf("Sub", "Dub")) { _, which -> action(which == 1) }
++            .show()
++    }
++
+     private fun showDownloadDialog() {
+         val m = manga ?: return
+         if (m.source == LOCAL_SOURCE_ID) {
+@@ -701,7 +714,7 @@
+         MaterialAlertDialogBuilder(this)
+             .setTitle("Download")
+             .setItems(options.map { it.first }.toTypedArray()) { _, which ->
+-                enqueueChapters(m, options[which].second)
++                withAudioChoice(m) { dub -> enqueueChapters(m, options[which].second, dub) }
+             }
+             .show()
+     }
+@@ -713,18 +726,23 @@
+             return
+         }
+         val selected = rows.map { it.chapter }.filter { it.id in selectedChapterIds }
+-        enqueueChapters(m, selected)
+-        clearChapterSelection()
++        withAudioChoice(m) { dub ->
++            enqueueChapters(m, selected, dub)
++            clearChapterSelection()
++        }
+     }
+ 
+-    private fun enqueueChapters(manga: MangaEntity, chapters: List<ChapterEntity>) {
+-        val chosen = chapters.filterNot { it.downloaded }
++    private fun enqueueChapters(manga: MangaEntity, chapters: List<ChapterEntity>, dub: Boolean? = null) {
++        val chosen = if (dub != null) chapters else chapters.filterNot { it.downloaded }
+         if (chosen.isEmpty()) {
+             toast("Nothing to download")
+             return
+         }
+-        app.downloads.enqueue(manga, chosen)
+-        toast("Queued ${chosen.size} chapter(s)")
++        app.downloads.enqueue(manga, chosen, dub)
++        toast(
++            if (dub == null) "Queued ${chosen.size} chapter(s)"
++            else "Queued ${chosen.size} episode(s) (${if (dub) "dub" else "sub"})"
++        )
+     }
+ 
+     private fun deleteAllDownloads() {
+@@ -783,8 +801,10 @@
+                 .show()
+             m.source == LOCAL_SOURCE_ID -> toast("Local entries are already on your device")
+             else -> {
+-                app.downloads.enqueue(m, listOf(row.chapter))
+-                toast("Queued")
++                withAudioChoice(m) { dub ->
++                    app.downloads.enqueue(m, listOf(row.chapter), dub)
++                    toast("Queued")
++                }
+             }
+         }
+     }
+@@ -907,7 +927,7 @@
+             }
+             h.genres.text = manga.genre.orEmpty()
+             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
+-            h.chapters.text = "$count chapters"
++            h.chapters.text = if (source?.isAnime == true) "$count episodes" else "$count chapters"
+             h.title.setTextColor(getColor(R.color.on_surface))
+             h.author.setTextColor(getColor(R.color.on_surface_variant))
+             h.status.setTextColor(getColor(R.color.on_surface_variant))
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/player/AnimePlayerActivity.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/player/AnimePlayerActivity.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/player/AnimePlayerActivity.kt	1970-01-01 00:00:00.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/player/AnimePlayerActivity.kt	2026-11-07 09:10:13.654995318 +0000
+@@ -0,0 +1,406 @@
++package com.imperialreader.ui.player
++
++import android.content.Context
++import android.content.Intent
++import android.content.pm.ActivityInfo
++import android.graphics.Color
++import android.graphics.drawable.GradientDrawable
++import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
++import android.view.Gravity
++import android.view.View
++import android.view.ViewGroup
++import android.view.WindowManager
++import android.widget.FrameLayout
++import android.widget.LinearLayout
++import android.widget.ProgressBar
++import android.widget.TextView
++import androidx.appcompat.app.AppCompatActivity
++import androidx.core.view.ViewCompat
++import androidx.core.view.WindowCompat
++import androidx.core.view.WindowInsetsCompat
++import androidx.core.view.WindowInsetsControllerCompat
++import androidx.lifecycle.lifecycleScope
++import androidx.media3.common.MediaItem
++import androidx.media3.common.PlaybackException
++import androidx.media3.common.Player
++import androidx.media3.common.util.UnstableApi
++import androidx.media3.datasource.DefaultDataSource
++import androidx.media3.datasource.okhttp.OkHttpDataSource
++import androidx.media3.exoplayer.ExoPlayer
++import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
++import androidx.media3.ui.PlayerView
++import com.google.android.material.dialog.MaterialAlertDialogBuilder
++import com.imperialreader.data.db.ChapterEntity
++import com.imperialreader.data.source.ChapterPages
++import com.imperialreader.data.source.SChapter
++import com.imperialreader.data.source.SManga
++import com.imperialreader.data.source.VideoOption
++import com.imperialreader.util.app
++import com.imperialreader.util.dp
++import com.imperialreader.util.toast
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.launch
++import java.io.IOException
++
++/**
++ * Dedicated player for anime sources (Source.isAnime). ReaderActivity hands anime episodes over to it; manga, comic
++ * and novel reading is untouched.
++ *
++ * Controls: Media3 PlayerView (play/pause, seek bar, ±10 s, speed/quality/audio/subtitle settings), plus a top bar
++ * with SUB / DUB, server picker and previous / next episode. Progress is saved in seconds in ChapterEntity.lastPageRead.
++ */
++@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
++class AnimePlayerActivity : AppCompatActivity() {
++
++    companion object {
++        private const val EXTRA_CHAPTER = "chapter_id"
++        fun intent(ctx: Context, chapterId: Long): Intent =
++            Intent(ctx, AnimePlayerActivity::class.java).putExtra(EXTRA_CHAPTER, chapterId)
++    }
++
++    private var player: ExoPlayer? = null
++    private lateinit var playerView: PlayerView
++    private lateinit var topBar: LinearLayout
++    private lateinit var titleView: TextView
++    private lateinit var spinner: ProgressBar
++    private lateinit var message: TextView
++    private lateinit var btnSub: TextView
++    private lateinit var btnDub: TextView
++
++    private var chapterId = 0L
++    private var episodeWasRead = false
++    private var episodes: List<ChapterEntity> = emptyList() // oldest -> newest
++    private var index = 0
++    private var options: List<VideoOption> = emptyList()
++    private var optionIndex = 0
++    private var pendingStartMs = 0L
++    private var loadJob: Job? = null
++    private var playJob: Job? = null
++
++    private val prefs by lazy { getSharedPreferences("anime_player", MODE_PRIVATE) }
++    private val handler = Handler(Looper.getMainLooper())
++    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
++    private val saver = object : Runnable {
++        override fun run() {
++            saveProgress(false)
++            handler.postDelayed(this, 10_000)
++        }
++    }
++
++    // ------------------------------------------------------------ lifecycle
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
++        WindowCompat.setDecorFitsSystemWindows(window, false)
++        setContentView(buildUi())
++        WindowInsetsControllerCompat(window, window.decorView).apply {
++            hide(WindowInsetsCompat.Type.systemBars())
++            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
++        }
++        loadEpisode(intent.getLongExtra(EXTRA_CHAPTER, 0L), null)
++    }
++
++    override fun onStart() {
++        super.onStart()
++        handler.postDelayed(saver, 10_000)
++    }
++
++    override fun onStop() {
++        handler.removeCallbacks(saver)
++        saveProgress(false)
++        player?.pause()
++        super.onStop()
++    }
++
++    override fun onDestroy() {
++        handler.removeCallbacks(saver)
++        releasePlayer()
++        super.onDestroy()
++    }
++
++    // ------------------------------------------------------------ UI
++
++    private fun chip(text: String, onClick: () -> Unit): TextView = TextView(this).apply {
++        this.text = text
++        setTextColor(Color.WHITE)
++        textSize = 13f
++        gravity = Gravity.CENTER
++        setPadding(dp(12), dp(7), dp(12), dp(7))
++        background = GradientDrawable().apply {
++            cornerRadius = dp(16).toFloat()
++            setColor(0x66000000)
++            setStroke(dp(1), 0x88FFFFFF.toInt())
++        }
++        setOnClickListener { onClick() }
++        layoutParams = LinearLayout.LayoutParams(
++            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
++        ).apply { marginStart = dp(6) }
++    }
++
++    private fun buildUi(): View {
++        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
++
++        playerView = PlayerView(this).apply {
++            useController = true
++            controllerShowTimeoutMs = 3500
++            setShowPreviousButton(false)
++            setShowNextButton(false)
++            setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
++                topBar.visibility = if (visibility == View.VISIBLE) View.VISIBLE else View.GONE
++            })
++        }
++        root.addView(playerView, FrameLayout.LayoutParams(-1, -1))
++
++        titleView = TextView(this).apply {
++            setTextColor(Color.WHITE)
++            textSize = 15f
++            maxLines = 1
++            ellipsize = android.text.TextUtils.TruncateAt.END
++        }
++        btnSub = chip("SUB") { switchLanguage(false) }
++        btnDub = chip("DUB") { switchLanguage(true) }
++        topBar = LinearLayout(this).apply {
++            orientation = LinearLayout.HORIZONTAL
++            gravity = Gravity.CENTER_VERTICAL
++            setPadding(dp(12), dp(8), dp(12), dp(16))
++            background = GradientDrawable(
++                GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xCC000000.toInt(), 0x00000000)
++            )
++            addView(chip("←") { finish() }.also { (it.layoutParams as LinearLayout.LayoutParams).marginStart = 0 })
++            addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
++                marginStart = dp(10)
++                marginEnd = dp(6)
++            })
++            addView(btnSub)
++            addView(btnDub)
++            addView(chip("Server") { showServerPicker() })
++            addView(chip("◀ Ep") { openEpisode(-1) })
++            addView(chip("Ep ▶") { openEpisode(1) })
++        }
++        root.addView(topBar, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
++
++        spinner = ProgressBar(this).apply { visibility = View.GONE }
++        root.addView(spinner, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.CENTER))
++
++        message = TextView(this).apply {
++            setTextColor(Color.WHITE)
++            textSize = 15f
++            gravity = Gravity.CENTER
++            setPadding(dp(32), dp(16), dp(32), dp(16))
++            visibility = View.GONE
++        }
++        root.addView(message, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
++
++        ViewCompat.setOnApplyWindowInsetsListener(topBar) { v, insets ->
++            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
++            v.setPadding(dp(12) + bars.left, dp(8) + bars.top, dp(12) + bars.right, dp(16))
++            insets
++        }
++        return root
++    }
++
++    private fun showLoading() {
++        spinner.visibility = View.VISIBLE
++        message.visibility = View.GONE
++    }
++
++    private fun showError(text: String, onTap: () -> Unit) {
++        spinner.visibility = View.GONE
++        message.text = text
++        message.visibility = View.VISIBLE
++        message.setOnClickListener { onTap() }
++        playerView.showController()
++    }
++
++    private fun updateButtons() {
++        val dub = options.getOrNull(optionIndex)?.dub == true
++        val hasSub = options.any { !it.dub }
++        val hasDub = options.any { it.dub }
++        btnSub.alpha = if (!dub) 1f else 0.45f
++        btnDub.alpha = if (dub) 1f else 0.45f
++        btnSub.visibility = if (hasSub || hasDub) View.VISIBLE else View.GONE
++        btnDub.visibility = if (hasDub) View.VISIBLE else View.GONE
++        btnSub.text = if (hasSub) "SUB" else "SUB ✕"
++    }
++
++    // ------------------------------------------------------------ loading
++
++    private fun loadEpisode(id: Long, startSeconds: Int?) {
++        saveProgress(false)
++        loadJob?.cancel()
++        loadJob = lifecycleScope.launch {
++            showLoading()
++            try {
++                val dao = app.db.chapterDao()
++                val ch = dao.getById(id) ?: throw IOException("Episode not found")
++                val m = app.db.mangaDao().getById(ch.mangaId) ?: throw IOException("Title not found")
++                val source = app.sources.get(m.source) ?: throw IOException("Source '${m.source}' is not available")
++                chapterId = id
++                episodeWasRead = ch.read
++                episodes = dao.getAll(m.id).sortedByDescending { it.sourceOrder }
++                index = episodes.indexOfFirst { it.id == id }.coerceAtLeast(0)
++                titleView.text = "${m.title}  •  ${ch.name}"
++
++                val episode = SChapter(url = ch.url, name = ch.name)
++                // A downloaded episode plays from its file(s) without touching the network: 001 = sub, 002 = dub.
++                val localFiles = if (ch.downloaded) {
++                    app.storage.chapterDir(m, ch, create = false)?.listFiles()?.filter { !it.isDirectory }.orEmpty()
++                } else emptyList()
++                val localSub = localFiles.firstOrNull { (it.name ?: "").startsWith("001") }
++                val localDub = localFiles.firstOrNull { (it.name ?: "").startsWith("002") }
++                if (localSub != null || localDub != null) {
++                    options = buildList {
++                        if (localSub != null) add(VideoOption("Downloaded SUB", false) { ChapterPages(listOf(localSub.uri.toString()), emptyMap()) })
++                        if (localDub != null) add(VideoOption("Downloaded DUB", true) { ChapterPages(listOf(localDub.uri.toString()), emptyMap()) })
++                    }
++                    val wantDub = prefs.getBoolean("dub", false)
++                    app.repo.recordHistory(id)
++                    pendingStartMs = startSeconds?.let { it * 1000L } ?: if (ch.read) 0L else ch.lastPageRead * 1000L
++                    playOption(options.indexOfFirst { it.dub == wantDub }.takeIf { it >= 0 } ?: 0)
++                    return@launch
++                }
++                var list = source.getVideoOptions(episode)
++                if (list.isEmpty()) {
++                    list = listOf(VideoOption("Default", false) {
++                        source.loadPages(SManga(url = m.url, title = m.title), episode)
++                    })
++                }
++                options = list
++                val preferDub = prefs.getBoolean("dub", false)
++                val pick = list.indexOfFirst { it.dub == preferDub }.takeIf { it >= 0 } ?: 0
++                app.repo.recordHistory(id)
++                pendingStartMs = startSeconds?.let { it * 1000L } ?: if (ch.read) 0L else ch.lastPageRead * 1000L
++                playOption(pick)
++            } catch (e: CancellationException) {
++                throw e
++            } catch (e: Exception) {
++                showError("Couldn't load this episode:\n${e.message}\n\nTap to retry") { loadEpisode(id, startSeconds) }
++            }
++        }
++    }
++
++    private fun playOption(i: Int) {
++        if (i !in options.indices) return
++        optionIndex = i
++        updateButtons()
++        playJob?.cancel()
++        playJob = lifecycleScope.launch {
++            showLoading()
++            try {
++                val pages = options[i].resolve()
++                val url = pages.urls.firstOrNull() ?: throw IOException("The server returned no stream")
++                val p = buildPlayer(pages.headers)
++                p.setMediaItem(MediaItem.fromUri(url))
++                p.prepare()
++                if (pendingStartMs > 0) p.seekTo(pendingStartMs)
++                pendingStartMs = 0L
++                p.playWhenReady = true
++            } catch (e: CancellationException) {
++                throw e
++            } catch (e: Exception) {
++                showError("${options[i].label} failed:\n${e.message}\n\nTap to try another server") { nextServer() }
++            }
++        }
++    }
++
++    private fun nextServer() = playOption(if (options.size > 1) (optionIndex + 1) % options.size else optionIndex)
++
++    private fun buildPlayer(headers: Map<String, String>): ExoPlayer {
++        releasePlayer()
++        val factory = DefaultDataSource.Factory(
++            this, OkHttpDataSource.Factory(app.network.client).setDefaultRequestProperties(headers)
++        )
++        val p = ExoPlayer.Builder(this)
++            .setMediaSourceFactory(DefaultMediaSourceFactory(factory))
++            .setSeekBackIncrementMs(10_000)
++            .setSeekForwardIncrementMs(10_000)
++            .build()
++        p.addListener(object : Player.Listener {
++            override fun onPlaybackStateChanged(state: Int) {
++                when (state) {
++                    Player.STATE_BUFFERING -> spinner.visibility = View.VISIBLE
++                    Player.STATE_READY -> {
++                        spinner.visibility = View.GONE
++                        message.visibility = View.GONE
++                    }
++                    Player.STATE_ENDED -> {
++                        saveProgress(true)
++                        if (index + 1 in episodes.indices) openEpisode(1)
++                    }
++                }
++            }
++
++            override fun onPlayerError(error: PlaybackException) {
++                showError("Playback failed (${error.errorCodeName}).\n\nTap to try another server") { nextServer() }
++            }
++        })
++        playerView.player = p
++        player = p
++        return p
++    }
++
++    private fun releasePlayer() {
++        playerView.player = null
++        player?.release()
++        player = null
++    }
++
++    // ------------------------------------------------------------ actions
++
++    private fun switchLanguage(dub: Boolean) {
++        val target = options.indexOfFirst { it.dub == dub }
++        if (target < 0) {
++            toast(if (dub) "No dub for this episode" else "No sub for this episode")
++            return
++        }
++        if (target == optionIndex) return
++        prefs.edit().putBoolean("dub", dub).apply()
++        pendingStartMs = player?.currentPosition ?: 0L
++        playOption(target)
++    }
++
++    private fun showServerPicker() {
++        if (options.isEmpty()) return
++        MaterialAlertDialogBuilder(this)
++            .setTitle("Server")
++            .setSingleChoiceItems(options.map { it.label }.toTypedArray(), optionIndex) { dialog, which ->
++                dialog.dismiss()
++                if (which != optionIndex) {
++                    pendingStartMs = player?.currentPosition ?: 0L
++                    playOption(which)
++                }
++            }
++            .show()
++    }
++
++    private fun openEpisode(delta: Int) {
++        val target = episodes.getOrNull(index + delta)
++        if (target == null) {
++            toast(if (delta > 0) "No next episode" else "No previous episode")
++            return
++        }
++        loadEpisode(target.id, null)
++    }
++
++    private fun saveProgress(finished: Boolean) {
++        val p = player ?: return
++        val id = chapterId
++        if (id == 0L) return
++        val duration = p.duration
++        if (duration <= 0L) return
++        val position = p.currentPosition
++        val done = finished || position >= duration * 0.9
++        val read = done || episodeWasRead
++        val seconds = if (done) 0 else (position / 1000).toInt()
++        if (read) episodeWasRead = true
++        ioScope.launch { app.db.chapterDao().saveProgress(id, seconds, read) }
++    }
++}
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/PageAdapter.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/PageAdapter.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/PageAdapter.kt	2026-11-07 03:01:36.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/PageAdapter.kt	2026-11-07 03:37:12.011810492 +0000
+@@ -380,7 +380,7 @@
+                 }
+                 h.progress.visibility = View.GONE
+                 h.root.minimumHeight = 0
+-                player.isLooping = true
++                player.isLooping = !isStreamUrl(url)
+             }
+             h.video.setOnErrorListener { _, _, _ ->
+                 if (h.bindingAdapterPosition == position) {
+@@ -443,7 +443,11 @@
+ 
+     private fun isVideoUrl(url: String): Boolean =
+         Uri.parse(url).lastPathSegment.orEmpty().substringBefore('?')
+-            .endsWith(".mp4", ignoreCase = true)
++            .let { it.endsWith(".mp4", ignoreCase = true) || it.endsWith(".m3u8", ignoreCase = true) }
++
++    /** HLS episodes play once; short MP4 clips keep looping as before. */
++    private fun isStreamUrl(url: String): Boolean =
++        Uri.parse(url).lastPathSegment.orEmpty().substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+ 
+     override fun onViewRecycled(holder: VH) {
+         boundImages.entries.removeAll { it.value === holder.image }
+diff -ruN orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/ReaderActivity.kt p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/ReaderActivity.kt
+--- orig/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/ReaderActivity.kt	2026-11-07 02:14:14.000000000 +0000
++++ p/Imperialclome/android/ImperialReader/app/src/main/java/com/imperialreader/ui/reader/ReaderActivity.kt	2026-11-07 03:40:20.318766339 +0000
+@@ -34,6 +34,7 @@
+ import com.imperialreader.data.db.MangaEntity
+ import com.imperialreader.data.network.CloudflareException
+ import com.imperialreader.ui.common.StarSpriteView
++import com.imperialreader.ui.player.AnimePlayerActivity
+ import com.imperialreader.ui.webview.WebViewActivity
+ import com.imperialreader.util.app
+ import com.imperialreader.util.toast
+@@ -232,6 +233,11 @@
+                 val chapterDao = app.db.chapterDao()
+                 val ch = chapterDao.getById(chapterId) ?: throw IOException("Chapter not found")
+                 val m = app.db.mangaDao().getById(ch.mangaId) ?: throw IOException("Manga not found")
++                if (app.sources.get(m.source)?.isAnime == true) {
++                    startActivity(AnimePlayerActivity.intent(this@ReaderActivity, chapterId))
++                    finish()
++                    return@launch
++                }
+                 manga = m
+                 mode = app.prefs.readerModeFor(m.id)
+                 chapters = chapterDao.getAll(m.id).sortedByDescending { it.sourceOrder }

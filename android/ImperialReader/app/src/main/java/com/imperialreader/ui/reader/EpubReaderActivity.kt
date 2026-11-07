@@ -46,7 +46,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.math.abs
 
 /** Minimal EPUB reader: unzips to cache, follows the OPF spine and shows each section in a WebView. */
-class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
+class EpubReaderActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"

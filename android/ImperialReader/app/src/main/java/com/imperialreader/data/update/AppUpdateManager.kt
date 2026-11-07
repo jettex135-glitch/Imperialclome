@@ -45,8 +45,9 @@ class AppUpdateManager(context: Context) {
     suspend fun checkAndDownloadUpdate(): File? = withContext(Dispatchers.IO) {
         val asset = latestApkAsset()
         val assetId = asset.optLong("id")
-        if (assetId <= 0L) throw IOException("GitHub returned an invalid APK asset")
-        val assetIdText = assetId.toString()
+        val assetIdText = if (assetId > 0L) assetId.toString()
+        else asset.optString("fallback_key").takeIf { it.isNotBlank() }
+            ?: throw IOException("GitHub returned an invalid APK asset")
         if (ctx.app.prefs.automaticAppUpdateLastAssetId == assetIdText) return@withContext null
 
         val apk = downloadApk(asset, allowOlderVersion = true)
@@ -69,9 +70,12 @@ class AppUpdateManager(context: Context) {
             .header("User-Agent", "ImperialReader")
             .build()
         val release = ctx.app.network.client.newCall(releaseRequest).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("GitHub release lookup failed (HTTP ${response.code})")
+            if (!response.isSuccessful) {
+                if (response.code == 403 || response.code == 429) return@use null
+                throw IOException("GitHub release lookup failed (HTTP ${response.code})")
+            }
             JSONObject(response.body?.string() ?: throw IOException("GitHub returned an empty release response"))
-        }
+        } ?: return fallbackApkAsset()
         return release.optJSONArray("assets")
             ?.let { assets ->
                 (0 until assets.length())
@@ -80,6 +84,25 @@ class AppUpdateManager(context: Context) {
                     .maxByOrNull { it.optString("created_at") }
             }
             ?: throw IOException("No APK is available in the V9 release")
+    }
+
+    private fun fallbackApkAsset(): JSONObject {
+        val request = Request.Builder()
+            .url(FALLBACK_APK_URL)
+            .head()
+            .header("User-Agent", "ImperialReader")
+            .build()
+        val fallbackKey = ctx.app.network.client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("GitHub release lookup was rate-limited and APK fallback failed (HTTP ${response.code})")
+            }
+            response.header("ETag") ?: response.header("Last-Modified")
+                ?: throw IOException("GitHub APK fallback did not provide an asset version")
+        }
+        return JSONObject()
+            .put("name", FALLBACK_APK_NAME)
+            .put("browser_download_url", FALLBACK_APK_URL)
+            .put("fallback_key", fallbackKey)
     }
 
     private suspend fun downloadApk(latestAsset: JSONObject, allowOlderVersion: Boolean): File {
@@ -167,6 +190,9 @@ class AppUpdateManager(context: Context) {
     private companion object {
         const val RELEASE_API_URL =
             "https://api.github.com/repos/Kvngz3n0/ImperialreaderApp/releases/tags/V9"
+        const val FALLBACK_APK_URL =
+            "https://github.com/Kvngz3n0/ImperialreaderApp/releases/download/V9/ImperialReader-V16-latest.apk"
+        const val FALLBACK_APK_NAME = "ImperialReader-V16-latest.apk"
         const val UPDATE_DIRECTORY = "app-updates"
         const val UPDATE_FILE = "latest.apk"
         const val MAX_APK_SIZE_BYTES = 200L * 1024L * 1024L

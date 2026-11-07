@@ -27,7 +27,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 
 /** Browser and manager for entries stored under the configured local/ directory. */
-class LocalEntriesActivity : androidx.appcompat.app.AppCompatActivity() {
+class LocalEntriesActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         fun intent(ctx: Context): Intent = Intent(ctx, LocalEntriesActivity::class.java)

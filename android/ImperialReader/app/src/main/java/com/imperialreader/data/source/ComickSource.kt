@@ -112,7 +112,8 @@ class ComickSource : HttpSource() {
         manga.status = when (data.optInt("status")) {
             1 -> 1
             2 -> if (data.optBoolean("translation_completed")) 2 else 1
-            3, 4 -> 3
+            3 -> 3
+            4 -> 4
             else -> 0
         }
 

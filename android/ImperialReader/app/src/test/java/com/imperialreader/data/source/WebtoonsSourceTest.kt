@@ -5,6 +5,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.jsoup.Jsoup
+import java.util.Base64
 
 class WebtoonsSourceTest {
     @Test
@@ -51,6 +52,36 @@ class WebtoonsSourceTest {
         )
 
         assertNull(WebtoonsSource.parseViewerAudioUrl(document, "https://m.webtoons.com/viewer/3"))
+    }
+
+    @Test
+    fun extractsAudioIdFromViewerBgmProperties() {
+        val document = Jsoup.parse(
+            """<script>window.__audioProperties__ = { episodeBgmList: [{"titleNo":679,"episodeNo":21,"audioId":"4A10DDE1B92388DA164C48B0356AA442","filePath":"679_21/track.mp3"}], audioPartnerKey: "16a1327c" };</script>""",
+            "https://www.webtoons.com/viewer/21"
+        )
+
+        assertEquals(
+            "4A10DDE1B92388DA164C48B0356AA442",
+            WebtoonsSource.parseViewerAudioId(document)
+        )
+    }
+
+    @Test
+    fun extractsPlayableAudioUrlFromWebtoonPlayToken() {
+        val expectedUrl = "https://global1-st-audiop.pstatic.net/stream/v3/audio/id/AAC/track.m4a?token=abc"
+        val payload = """{"audioInfo":{"url":"$expectedUrl"}}"""
+        val playToken = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(payload.toByteArray(Charsets.UTF_8))
+
+        assertEquals(expectedUrl, WebtoonsSource.parsePlayTokenAudioUrl(playToken))
+        assertNull(WebtoonsSource.parsePlayTokenAudioUrl("not-a-token"))
+        assertNull(
+            WebtoonsSource.parsePlayTokenAudioUrl(
+                Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString("""{"audioInfo":{"url":"https://example.com/audio.m4a"}}""".toByteArray())
+            )
+        )
     }
 
     @Test

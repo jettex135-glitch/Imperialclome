@@ -111,7 +111,7 @@ object ChapterLoader {
     /** Extracts all images to the cache (flattened + naturally sorted) and returns file:// URIs. CBZ/ZIP/CBR/RAR. */
     private fun extractArchive(ctx: Context, doc: DocumentFile): List<String> {
         val root = File(ctx.cacheDir, "cbz").apply { mkdirs() }
-        val dir = File(root, doc.uri.toString().hashCode().toString())
+        val dir = File(root, "${doc.uri.hashCode()}_artwork_v2")
         // keep only the archive currently being read to bound cache growth
         root.listFiles()?.filter { it != dir }?.forEach { it.deleteRecursively() }
 
@@ -123,9 +123,15 @@ object ChapterLoader {
             marker.writeText("ok")
         }
         return dir.listFiles()
-            ?.filter { it.isFile && isImageName(it.name) }
+            ?.filter { it.isFile && (isImageName(it.name) || LocalArtworkPreview.supports(it.name)) }
             ?.sortedWith(compareBy(NaturalOrder) { it.name })
-            ?.map { Uri.fromFile(it).toString() }
+            ?.map { file ->
+                if (LocalArtworkPreview.supports(file.name)) {
+                    LocalArtworkPreview.readerPage(ctx, DocumentFile.fromFile(file))
+                } else {
+                    Uri.fromFile(file).toString()
+                }
+            }
             ?: emptyList()
     }
 }

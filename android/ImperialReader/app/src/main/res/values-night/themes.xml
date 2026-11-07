@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Imperial" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/imperial_primary</item>
+        <item name="colorOnPrimary">@color/imperial_on_primary</item>
+        <item name="colorPrimaryContainer">@color/imperial_surface_variant</item>
+        <item name="colorOnPrimaryContainer">@color/imperial_on_surface</item>
+        <item name="colorSecondary">@color/imperial_secondary</item>
+        <item name="colorOnSecondary">@color/imperial_on_primary</item>
+        <item name="colorSecondaryContainer">@color/imperial_surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/imperial_on_surface</item>
+        <item name="colorSurface">@color/imperial_surface</item>
+        <item name="colorOnSurface">@color/imperial_on_surface</item>
+        <item name="colorSurfaceVariant">@color/imperial_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/imperial_on_surface_variant</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Imperial.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Imperial.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Imperial.Large</item>
+        <item name="android:colorBackground">@color/imperial_background</item>
+        <item name="android:statusBarColor">@color/imperial_status_bar</item>
+        <item name="android:navigationBarColor">@color/imperial_navigation_bar</item>
+        <item name="android:windowAnimationStyle">@style/ActivityAnim</item>
+    </style>
+
+    <style name="Theme.Ocean" parent="Theme.Imperial">
+        <item name="colorPrimary">@color/ocean_primary</item>
+        <item name="colorOnPrimary">@color/ocean_on_primary</item>
+        <item name="colorPrimaryContainer">@color/ocean_surface_variant</item>
+        <item name="colorOnPrimaryContainer">@color/ocean_on_surface</item>
+        <item name="colorSecondary">@color/ocean_secondary</item>
+        <item name="colorOnSecondary">@color/ocean_on_primary</item>
+        <item name="colorSecondaryContainer">@color/ocean_surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/ocean_on_surface</item>
+        <item name="colorSurface">@color/ocean_surface</item>
+        <item name="colorOnSurface">@color/ocean_on_surface</item>
+        <item name="colorSurfaceVariant">@color/ocean_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/ocean_on_surface_variant</item>
+        <item name="android:colorBackground">@color/ocean_background</item>
+        <item name="android:statusBarColor">@color/ocean_status_bar</item>
+        <item name="android:navigationBarColor">@color/ocean_navigation_bar</item>
+    </style>
+
+    <style name="Theme.Forest" parent="Theme.Imperial">
+        <item name="colorPrimary">@color/forest_primary</item>
+        <item name="colorOnPrimary">@color/forest_on_primary</item>
+        <item name="colorPrimaryContainer">@color/forest_surface_variant</item>
+        <item name="colorOnPrimaryContainer">@color/forest_on_surface</item>
+        <item name="colorSecondary">@color/forest_secondary</item>
+        <item name="colorOnSecondary">@color/forest_on_primary</item>
+        <item name="colorSecondaryContainer">@color/forest_surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/forest_on_surface</item>
+        <item name="colorSurface">@color/forest_surface</item>
+        <item name="colorOnSurface">@color/forest_on_surface</item>
+        <item name="colorSurfaceVariant">@color/forest_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/forest_on_surface_variant</item>
+        <item name="android:colorBackground">@color/forest_background</item>
+        <item name="android:statusBarColor">@color/forest_status_bar</item>
+        <item name="android:navigationBarColor">@color/forest_navigation_bar</item>
+    </style>
+
+    <style name="Theme.Rose" parent="Theme.Imperial">
+        <item name="colorPrimary">@color/rose_primary</item>
+        <item name="colorOnPrimary">@color/rose_on_primary</item>
+        <item name="colorPrimaryContainer">@color/rose_surface_variant</item>
+        <item name="colorOnPrimaryContainer">@color/rose_on_surface</item>
+        <item name="colorSecondary">@color/rose_secondary</item>
+        <item name="colorOnSecondary">@color/rose_on_primary</item>
+        <item name="colorSecondaryContainer">@color/rose_surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/rose_on_surface</item>
+        <item name="colorSurface">@color/rose_surface</item>
+        <item name="colorOnSurface">@color/rose_on_surface</item>
+        <item name="colorSurfaceVariant">@color/rose_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/rose_on_surface_variant</item>
+        <item name="android:colorBackground">@color/rose_background</item>
+        <item name="android:statusBarColor">@color/rose_status_bar</item>
+        <item name="android:navigationBarColor">@color/rose_navigation_bar</item>
+    </style>
+</resources>

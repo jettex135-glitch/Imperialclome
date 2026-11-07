@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-
+    <PreferenceCategory android:title="Appearance" app:iconSpaceReserved="false">
+        <Preference
+            android:key="custom_themes"
+            android:title="Appearance"
+            android:summary="Choose a color scheme and system, light, or dark mode"/>
+    </PreferenceCategory>
     <PreferenceCategory android:title="Reader" app:iconSpaceReserved="false">
         <ListPreference
             android:key="reader_mode"

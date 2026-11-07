@@ -1,6 +1,8 @@
 package com.imperialreader.ui.reader
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
@@ -10,6 +12,7 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.MediaController
@@ -17,10 +20,14 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.VideoView
 import androidx.recyclerview.widget.RecyclerView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.appcompat.widget.AppCompatImageView
 import coil.load
 import coil.size.Size
 import coil.transform.Transformation
+import com.imperialreader.R
 import com.imperialreader.data.source.MangaFirePageTransform
 import com.imperialreader.util.dp
 import kotlin.math.min
@@ -214,9 +221,16 @@ class PageAdapter(
         val video: VideoView,
         val mediaController: MediaController,
         val videoControlsButton: TextView,
+        val fullScreenButton: TextView,
         val progress: ProgressBar,
         val error: TextView
-    ) : RecyclerView.ViewHolder(root)
+    ) : RecyclerView.ViewHolder(root) {
+        var fullScreen = false
+        var topBarVisibility = View.GONE
+        var bottomBarVisibility = View.GONE
+        var nextChapterPromptVisibility = View.GONE
+        var systemBarsVisible = false
+    }
 
     override fun getItemCount() = pages.size
 
@@ -234,7 +248,7 @@ class PageAdapter(
             if (webtoon) adjustViewBounds = true
         }
         val video = VideoView(ctx).apply {
-            layoutParams = FrameLayout.LayoutParams(match, if (webtoon) ctx.dp(320) else match)
+            layoutParams = FrameLayout.LayoutParams(match, match, Gravity.CENTER)
             visibility = View.GONE
         }
         val mediaController = MediaController(ctx).apply { setAnchorView(root) }
@@ -260,6 +274,28 @@ class PageAdapter(
             isFocusable = true
             visibility = View.GONE
         }
+        val fullScreenButton = TextView(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END
+            ).apply {
+                topMargin = ctx.dp(16)
+                marginEnd = ctx.dp(16)
+            }
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 12f
+            setPadding(ctx.dp(12), ctx.dp(8), ctx.dp(12), ctx.dp(8))
+            background = GradientDrawable().apply {
+                setColor(0xCC202020.toInt())
+                cornerRadius = ctx.dp(20).toFloat()
+            }
+            text = "FULL SCREEN"
+            contentDescription = "Enter full screen video"
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+        }
         val progress = ProgressBar(ctx).apply {
             isIndeterminate = true
             layoutParams = FrameLayout.LayoutParams(ctx.dp(36), ctx.dp(36), android.view.Gravity.CENTER)
@@ -274,9 +310,10 @@ class PageAdapter(
         root.addView(image)
         root.addView(video)
         root.addView(videoControlsButton)
+        root.addView(fullScreenButton)
         root.addView(progress)
         root.addView(error)
-        return VH(root, image, video, mediaController, videoControlsButton, progress, error)
+        return VH(root, image, video, mediaController, videoControlsButton, fullScreenButton, progress, error)
     }
 
     override fun onBindViewHolder(h: VH, position: Int) {
@@ -289,34 +326,38 @@ class PageAdapter(
         if (position == activePage) return
         val previous = activePage
         activePage = position
-        if (previous in pages.indices && isPawchiveVideo(pages[previous])) {
+        if (previous in pages.indices && isVideoUrl(pages[previous])) {
             boundHolders[previous]?.let { holder ->
+                exitFullScreen(holder)
+                setVideoPageLayout(holder, false)
                 holder.video.stopPlayback()
                 holder.video.visibility = View.GONE
                 holder.mediaController.hide()
                 holder.videoControlsButton.visibility = View.GONE
+                holder.fullScreenButton.visibility = View.GONE
                 holder.videoControlsButton.setOnClickListener(null)
+                holder.fullScreenButton.setOnClickListener(null)
                 holder.video.setOnClickListener(null)
                 holder.progress.visibility = View.GONE
             }
         }
         listOf(previous, position)
-            .filter { it in pages.indices && isPawchiveVideo(pages[it]) }
+            .filter { it in pages.indices && isVideoUrl(pages[it]) }
             .distinct()
             .forEach(::notifyItemChanged)
     }
 
-    fun pausePawchiveVideo() {
-        boundHolders[activePage]?.takeIf {
-            pages.getOrNull(activePage)?.let(::isPawchiveVideo) == true &&
-                it.video.visibility == View.VISIBLE
+    fun pauseVideo() {
+        boundHolders[activePage]?.takeIf { holder ->
+            pages.getOrNull(activePage)?.let { isVideoPage(holder.root.context, it) } == true &&
+                holder.video.visibility == View.VISIBLE
         }?.video?.pause()
     }
 
-    fun resumePawchiveVideo() {
-        boundHolders[activePage]?.takeIf {
-            pages.getOrNull(activePage)?.let(::isPawchiveVideo) == true &&
-                it.video.visibility == View.VISIBLE
+    fun resumeVideo() {
+        boundHolders[activePage]?.takeIf { holder ->
+            pages.getOrNull(activePage)?.let { isVideoPage(holder.root.context, it) } == true &&
+                holder.video.visibility == View.VISIBLE
         }?.video?.start()
     }
 
@@ -326,14 +367,18 @@ class PageAdapter(
         boundImages[position] = h.image
         h.image.onZoomChanged = { zoomed -> onZoomChanged(position, zoomed) }
         h.error.visibility = View.GONE
-        if (isPawchiveVideo(url) && position != activePage) {
+        if (isVideoPage(h.root.context, url) && position != activePage) {
+            exitFullScreen(h)
+            setVideoPageLayout(h, false)
             h.video.stopPlayback()
             h.video.setOnPreparedListener(null)
             h.video.setOnErrorListener(null)
             h.mediaController.hide()
             h.video.visibility = View.GONE
             h.videoControlsButton.visibility = View.GONE
+            h.fullScreenButton.visibility = View.GONE
             h.videoControlsButton.setOnClickListener(null)
+            h.fullScreenButton.setOnClickListener(null)
             h.video.setOnClickListener(null)
             h.image.load(null)
             h.image.visibility = View.GONE
@@ -344,13 +389,17 @@ class PageAdapter(
         h.progress.visibility = View.VISIBLE
         if (isVideoPage(h.root.context, url)) {
             h.video.stopPlayback()
+            setVideoPageLayout(h, true)
             h.image.load(null)
             h.image.visibility = View.GONE
             h.image.setImageDrawable(null)
             h.image.setOnLongClickListener(null)
             h.video.visibility = View.VISIBLE
-            h.videoControlsButton.visibility =
-                if (isPawchiveVideo(url)) View.VISIBLE else View.GONE
+            h.videoControlsButton.visibility = View.VISIBLE
+            h.fullScreenButton.visibility = View.VISIBLE
+            h.fullScreenButton.text = "FULL SCREEN"
+            h.fullScreenButton.contentDescription = "Enter full screen video"
+            h.fullScreenButton.setOnClickListener { toggleFullScreen(h) }
             h.videoControlsButton.text = "VIDEO  |  TAP FOR CONTROLS"
             h.videoControlsButton.contentDescription = "Video. Tap to show playback controls"
             h.videoControlsButton.setOnClickListener {
@@ -373,7 +422,7 @@ class PageAdapter(
             }
             h.video.setOnPreparedListener { player ->
                 if (h.bindingAdapterPosition != position) return@setOnPreparedListener
-                if (isPawchiveVideo(url) && position != activePage) {
+                if (position != activePage) {
                     h.video.stopPlayback()
                     h.video.visibility = View.GONE
                     h.progress.visibility = View.GONE
@@ -381,7 +430,7 @@ class PageAdapter(
                 }
                 h.progress.visibility = View.GONE
                 h.root.minimumHeight = 0
-                player.isLooping = true
+                player.isLooping = !isStreamUrl(url)
             }
             h.video.setOnErrorListener { _, _, _ ->
                 if (h.bindingAdapterPosition == position) {
@@ -392,16 +441,20 @@ class PageAdapter(
                 }
                 true
             }
-            h.video.setVideoURI(Uri.parse(url))
+            h.video.setVideoURI(Uri.parse(url), headers)
             return
         }
+        exitFullScreen(h)
+        setVideoPageLayout(h, false)
         h.video.stopPlayback()
         h.video.setOnPreparedListener(null)
         h.video.setOnErrorListener(null)
         h.mediaController.hide()
         h.video.visibility = View.GONE
         h.videoControlsButton.visibility = View.GONE
+        h.fullScreenButton.visibility = View.GONE
         h.videoControlsButton.setOnClickListener(null)
+        h.fullScreenButton.setOnClickListener(null)
         h.video.setOnClickListener(null)
         h.image.visibility = View.VISIBLE
         h.image.setOnLongClickListener {
@@ -436,20 +489,79 @@ class PageAdapter(
 
     private fun isVideoPage(context: Context, url: String): Boolean {
         val uri = Uri.parse(url)
-        val name = uri.lastPathSegment.orEmpty().substringBefore('?')
-        if (name.endsWith(".mp4", ignoreCase = true)) return true
+        if (isVideoUrl(url)) return true
         return uri.scheme == "content" &&
             context.contentResolver.getType(uri)?.substringBefore(';')
                 ?.equals("video/mp4", ignoreCase = true) == true
     }
 
-    private fun isPawchiveVideo(url: String): Boolean {
-        val uri = Uri.parse(url)
-        val host = uri.host ?: return false
-        return (host.equals("pawchive.pw", ignoreCase = true) ||
-            host.endsWith(".pawchive.pw", ignoreCase = true)) &&
-            uri.lastPathSegment.orEmpty().substringBefore('?').endsWith(".mp4", ignoreCase = true)
+    private fun setVideoPageLayout(holder: VH, isVideo: Boolean) {
+        val params = holder.root.layoutParams as? RecyclerView.LayoutParams ?: return
+        val height = if (webtoon && isVideo) ViewGroup.LayoutParams.MATCH_PARENT
+        else if (webtoon) ViewGroup.LayoutParams.WRAP_CONTENT
+        else ViewGroup.LayoutParams.MATCH_PARENT
+        if (params.height != height) {
+            params.height = height
+            holder.root.layoutParams = params
+        }
+        holder.video.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.CENTER
+        )
     }
+
+    private fun toggleFullScreen(holder: VH) {
+        val activity = holder.root.context.findActivity() ?: return
+        if (holder.fullScreen) {
+            exitFullScreen(holder)
+            return
+        }
+        holder.topBarVisibility = activity.findViewById<View>(R.id.readerTop)?.visibility ?: View.GONE
+        holder.bottomBarVisibility = activity.findViewById<View>(R.id.readerBottom)?.visibility ?: View.GONE
+        holder.nextChapterPromptVisibility =
+            activity.findViewById<View>(R.id.nextChapterPrompt)?.visibility ?: View.GONE
+        val controller = WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+        holder.systemBarsVisible = ViewCompat.getRootWindowInsets(activity.window.decorView)
+            ?.isVisible(WindowInsetsCompat.Type.systemBars()) ?: true
+        activity.findViewById<View>(R.id.readerTop)?.visibility = View.GONE
+        activity.findViewById<View>(R.id.readerBottom)?.visibility = View.GONE
+        activity.findViewById<View>(R.id.nextChapterPrompt)?.visibility = View.GONE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        holder.fullScreen = true
+        holder.fullScreenButton.text = "EXIT FULL SCREEN"
+        holder.fullScreenButton.contentDescription = "Exit full screen video"
+    }
+
+    private fun exitFullScreen(holder: VH) {
+        if (!holder.fullScreen) return
+        val activity = holder.root.context.findActivity()
+        if (activity != null) {
+            activity.findViewById<View>(R.id.readerTop)?.visibility = holder.topBarVisibility
+            activity.findViewById<View>(R.id.readerBottom)?.visibility = holder.bottomBarVisibility
+            activity.findViewById<View>(R.id.nextChapterPrompt)?.visibility = holder.nextChapterPromptVisibility
+            val controller = WindowInsetsControllerCompat(activity.window, activity.window.decorView)
+            if (holder.systemBarsVisible) controller.show(WindowInsetsCompat.Type.systemBars())
+            else controller.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        holder.fullScreen = false
+        holder.fullScreenButton.text = "FULL SCREEN"
+        holder.fullScreenButton.contentDescription = "Enter full screen video"
+    }
+
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+
+    private fun isVideoUrl(url: String): Boolean =
+        Uri.parse(url).lastPathSegment.orEmpty().substringBefore('?')
+            .let { it.endsWith(".mp4", ignoreCase = true) || it.endsWith(".m3u8", ignoreCase = true) }
+
+    /** HLS episodes play once; short MP4 clips keep looping as before. */
+    private fun isStreamUrl(url: String): Boolean =
+        Uri.parse(url).lastPathSegment.orEmpty().substringBefore('?').endsWith(".m3u8", ignoreCase = true)
 
     override fun onViewRecycled(holder: VH) {
         boundImages.entries.removeAll { it.value === holder.image }
@@ -463,7 +575,11 @@ class PageAdapter(
         holder.mediaController.hide()
         holder.video.visibility = View.GONE
         holder.videoControlsButton.visibility = View.GONE
+        exitFullScreen(holder)
+        setVideoPageLayout(holder, false)
+        holder.fullScreenButton.visibility = View.GONE
         holder.videoControlsButton.setOnClickListener(null)
+        holder.fullScreenButton.setOnClickListener(null)
         holder.video.setOnClickListener(null)
         if (webtoon) holder.root.minimumHeight = holder.root.context.dp(320)
         super.onViewRecycled(holder)

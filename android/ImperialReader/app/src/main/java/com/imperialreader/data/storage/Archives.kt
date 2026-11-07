@@ -48,7 +48,12 @@ object Archives {
 
     private fun flat(name: String) = name.replace('/', '_').replace('\\', '_').replace("..", "_")
 
-    private fun skip(name: String) = !isImageName(name) || name.contains("__MACOSX") || name.substringAfterLast('/').substringAfterLast('\\').startsWith(".")
+    private fun skip(name: String) =
+        (!isImageName(name) && !LocalArtworkPreview.supports(name)) ||
+            name.contains("__MACOSX") ||
+            name.substringAfterLast('/').substringAfterLast('\\').startsWith(".")
+
+    private fun skipCover(name: String) = skip(name) || LocalArtworkPreview.supports(name)
 
     /** Extracts every page image into [dir] (names flattened; sort naturally afterwards). */
     fun extractImages(ctx: Context, doc: DocumentFile, dir: File) {
@@ -78,7 +83,7 @@ object Archives {
                 ZipInputStream(raw).use { zip ->
                     var entry = zip.nextEntry
                     while (entry != null && !found) {
-                        if (!entry.isDirectory && !skip(entry.name)) {
+                        if (!entry.isDirectory && !skipCover(entry.name)) {
                             target.outputStream().use { zip.copyTo(it) }
                             found = true
                         }
@@ -87,7 +92,7 @@ object Archives {
                 }
             }
             Kind.RAR -> withRar(ctx, doc) { archive ->
-                imageHeaders(archive).firstOrNull()?.let {
+                imageHeaders(archive).firstOrNull { !LocalArtworkPreview.supports(it.fileName) }?.let {
                     target.outputStream().use { out -> archive.extractFile(it, out) }
                     found = true
                 }
@@ -112,9 +117,8 @@ object Archives {
                 if (size < 0L) throw IOException("Invalid TAR entry size")
                 val type = header[156].toInt().toChar()
                 val regularFile = type == '\u0000' || type == '0'
-                val shouldExtract = regularFile && isImageName(entryName) &&
-                    !entryName.contains("__MACOSX") &&
-                    !entryName.substringAfterLast('/').substringAfterLast('\\').startsWith(".")
+                val shouldExtract = regularFile &&
+                    !(if (target != null) skipCover(entryName) else skip(entryName))
                 if (shouldExtract) {
                     val output = target ?: File(dir, flat(entryName))
                     output.parentFile?.mkdirs()

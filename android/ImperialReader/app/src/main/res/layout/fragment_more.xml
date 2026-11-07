@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:background="@color/black">
+    android:background="?android:attr/colorBackground">
     <LinearLayout
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="vertical">
@@ -13,7 +13,7 @@
                 android:src="@drawable/ic_launcher_foreground" android:contentDescription="logo"/>
             <TextView
                 android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:text="Imperial Reader" android:textColor="@color/gold"
+                android:text="Imperial Reader" android:textColor="?attr/colorPrimary"
                 android:textSize="20sp" android:textStyle="bold"/>
         </LinearLayout>
 
@@ -21,23 +21,23 @@
             android:id="@+id/switchDownloadedOnly"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="12dp" android:paddingBottom="12dp"
-            android:text="Downloaded only" android:textColor="@color/on_surface" android:textSize="16sp"/>
+            android:text="Downloaded only" android:textColor="?attr/colorOnSurface" android:textSize="16sp"/>
         <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switchIncognito"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="12dp" android:paddingBottom="12dp"
-            android:text="Incognito mode (no history)" android:textColor="@color/on_surface" android:textSize="16sp"/>
+            android:text="Incognito mode (no history)" android:textColor="?attr/colorOnSurface" android:textSize="16sp"/>
 
-        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card"/>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="?attr/colorSurfaceVariant"/>
 
         <TextView
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingTop="18dp" android:paddingEnd="16dp" android:paddingBottom="6dp"
-            android:text="Download queue" android:textColor="@color/gold" android:textSize="16sp" android:textStyle="bold"/>
+            android:text="Download queue" android:textColor="?attr/colorPrimary" android:textSize="16sp" android:textStyle="bold"/>
         <TextView android:id="@+id/queueSummary"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingBottom="6dp"
-            android:text="Nothing is queued" android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+            android:text="Nothing is queued" android:textColor="?attr/colorOnSurfaceVariant" android:textSize="12sp"/>
         <Button android:id="@+id/queuePauseAll"
             android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:layout_gravity="end" android:layout_marginStart="16dp" android:layout_marginEnd="16dp"
@@ -45,14 +45,14 @@
         <TextView android:id="@+id/queueEmpty"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="8dp" android:paddingBottom="16dp"
-            android:text="No active or queued chapter downloads" android:textColor="@color/on_surface_variant" android:textSize="14sp"
+            android:text="No active or queued chapter downloads" android:textColor="?attr/colorOnSurfaceVariant" android:textSize="14sp"
             android:visibility="visible"/>
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/downloadQueue"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:nestedScrollingEnabled="false" android:visibility="gone"/>
 
-        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card"/>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="?attr/colorSurfaceVariant"/>
 
         <LinearLayout android:id="@+id/rowStorage" style="@style/MoreRow">
             <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_folder" android:contentDescription="storage"/>

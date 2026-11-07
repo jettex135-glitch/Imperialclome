@@ -16,10 +16,11 @@ import com.imperialreader.R
 import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
+import com.imperialreader.ui.theme.ThemeEditorActivity
 import com.imperialreader.util.toast
 import kotlinx.coroutines.launch
 
-class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
+class SettingsActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -35,6 +36,11 @@ class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences, rootKey)
             val ctx = requireContext()
+
+            findPreference<Preference>("custom_themes")?.setOnPreferenceClickListener {
+                startActivity(android.content.Intent(ctx, ThemeEditorActivity::class.java))
+                true
+            }
 
             findPreference<Preference>("version")?.summary = runCatching {
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName

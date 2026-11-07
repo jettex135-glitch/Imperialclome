@@ -1,0 +1,30 @@
+name: Check live sources
+
+# Runs the parsers against the REAL sites (lists, chapters, images / MP4 files) and prints what was found.
+# Start it from the Actions tab -> "Check live sources" -> Run workflow, then open the log of the test step.
+on:
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android/ImperialReader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.2"
+      - name: Live check (ManhwaFan + SFM Compile)
+        env:
+          LIVE_SOURCES: "1"
+        run: gradle testDebugUnitTest --tests "*LiveSourceCheckTest*" -i --stacktrace

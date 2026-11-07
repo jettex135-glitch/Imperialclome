@@ -36,7 +36,7 @@ abstract class HttpSource : Source {
         super<Source>.searchByAuthor(query, page)
 
     protected open suspend fun getString(url: String, headers: Map<String, String> = emptyMap()): String =
-        execute(Request.Builder().url(url), headers)
+        execute(Request.Builder().url(absoluteUrl(url)), headers)
 
     protected suspend fun postString(
         url: String,
@@ -48,7 +48,7 @@ abstract class HttpSource : Source {
         } else {
             FormBody.Builder().apply { form.forEach { (k, v) -> add(k, v) } }.build()
         }
-        return execute(Request.Builder().url(url).post(body), headers)
+        return execute(Request.Builder().url(absoluteUrl(url)).post(body), headers)
     }
 
     private suspend fun execute(builder: Request.Builder, headers: Map<String, String>): String =
@@ -71,12 +71,14 @@ abstract class HttpSource : Source {
 
     protected fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-    protected fun absoluteUrl(url: String): String = when {
-        url.startsWith("http://") || url.startsWith("https://") -> url
-        url.startsWith("//") -> "https:$url"
-        url.startsWith("/") -> baseUrl.trimEnd('/') + url
-        else -> baseUrl.trimEnd('/') + "/" + url
-    }
+    protected fun absoluteUrl(url: String): String = resolveHttpSourceUrl(baseUrl, url)
+}
+
+internal fun resolveHttpSourceUrl(baseUrl: String, url: String): String = when {
+    url.startsWith("http://") || url.startsWith("https://") -> url
+    url.startsWith("//") -> "https:$url"
+    url.startsWith("/") -> baseUrl.trimEnd('/') + url
+    else -> baseUrl.trimEnd('/') + "/" + url
 }
 
 internal fun parseRetryAfterMillis(value: String?, nowMillis: Long = System.currentTimeMillis()): Long? {

@@ -5,13 +5,13 @@
     android:gravity="center"
     android:orientation="vertical"
     android:padding="32dp"
-    android:background="@color/black">
+    android:background="?android:attr/colorBackground">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="@string/app_lock_title"
-        android:textColor="@color/gold"
+        android:textColor="?attr/colorPrimary"
         android:textSize="24sp"
         android:textStyle="bold"/>
 
@@ -22,7 +22,7 @@
         android:layout_marginTop="12dp"
         android:gravity="center"
         android:text="@string/app_lock_prompt"
-        android:textColor="@color/on_surface_variant"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:textSize="16sp"/>
 
     <com.google.android.material.button.MaterialButton

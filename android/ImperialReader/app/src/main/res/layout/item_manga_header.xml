@@ -7,7 +7,7 @@
         android:orientation="horizontal">
         <com.google.android.material.card.MaterialCardView
             android:layout_width="110dp" android:layout_height="165dp"
-            app:cardCornerRadius="12dp" app:cardElevation="0dp" app:cardBackgroundColor="@color/card">
+            app:cardCornerRadius="12dp" app:cardElevation="0dp" app:cardBackgroundColor="?attr/colorSurfaceVariant">
             <ImageView android:id="@+id/hCover"
                 android:layout_width="match_parent" android:layout_height="match_parent"
                 android:scaleType="centerCrop" android:contentDescription="cover"/>
@@ -17,15 +17,15 @@
             android:layout_marginStart="16dp" android:orientation="vertical">
             <TextView android:id="@+id/hTitle"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/on_surface" android:textSize="20sp" android:textStyle="bold"/>
+                android:textColor="?attr/colorOnSurface" android:textSize="20sp" android:textStyle="bold"/>
             <TextView android:id="@+id/hAuthor"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:textColor="@color/on_surface_variant" android:textSize="14sp"/>
+                android:textColor="?attr/colorOnSurfaceVariant" android:textSize="14sp"/>
             <TextView android:id="@+id/hStatus"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:textColor="@color/on_surface_variant" android:textSize="13sp"/>
+                android:textColor="?attr/colorOnSurfaceVariant" android:textSize="13sp"/>
         </LinearLayout>
     </LinearLayout>
     <LinearLayout
@@ -45,13 +45,13 @@
     <TextView android:id="@+id/hDesc"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="16dp" android:maxLines="4" android:ellipsize="end"
-        android:textColor="@color/on_surface" android:textSize="14sp"/>
+        android:textColor="?attr/colorOnSurface" android:textSize="14sp"/>
     <TextView android:id="@+id/hGenres"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:textColor="@color/gold_light" android:textSize="12sp"/>
+        android:textColor="?attr/colorSecondary" android:textSize="12sp"/>
     <TextView android:id="@+id/hChapterCount"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
-        android:textColor="@color/on_surface" android:textSize="16sp" android:textStyle="bold"/>
+        android:textColor="?attr/colorOnSurface" android:textSize="16sp" android:textStyle="bold"/>
 </LinearLayout>

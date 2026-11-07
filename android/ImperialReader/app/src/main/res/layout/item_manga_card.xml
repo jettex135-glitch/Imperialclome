@@ -2,7 +2,7 @@
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent" android:layout_height="wrap_content"
     android:layout_margin="4dp"
-    app:cardBackgroundColor="@color/card" app:cardCornerRadius="12dp" app:cardElevation="0dp">
+    app:cardBackgroundColor="?attr/colorSurfaceVariant" app:cardCornerRadius="12dp" app:cardElevation="0dp">
     <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent" android:layout_height="wrap_content">
         <ImageView android:id="@+id/cover"
@@ -32,21 +32,21 @@
                 android:background="@drawable/bg_badge_gold"
                 android:paddingStart="6dp" android:paddingEnd="6dp"
                 android:paddingTop="1dp" android:paddingBottom="1dp"
-                android:textColor="@color/black" android:textSize="11sp" android:textStyle="bold"
+                android:textColor="?attr/colorOnPrimary" android:textSize="11sp" android:textStyle="bold"
                 android:visibility="gone"/>
             <TextView android:id="@+id/badgeDl"
                 android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:background="@drawable/bg_badge_dark"
                 android:paddingStart="6dp" android:paddingEnd="6dp"
                 android:paddingTop="1dp" android:paddingBottom="1dp"
-                android:textColor="@color/gold_light" android:textSize="11sp" android:textStyle="bold"
+                android:textColor="?attr/colorSecondary" android:textSize="11sp" android:textStyle="bold"
                 android:visibility="gone"/>
         </LinearLayout>
         <TextView android:id="@+id/selectionMark"
             android:layout_width="28dp" android:layout_height="28dp"
             android:layout_margin="6dp" android:gravity="center"
             android:background="@drawable/bg_badge_gold"
-            android:text="✓" android:textColor="@color/black" android:textSize="18sp" android:textStyle="bold"
+            android:text="✓" android:textColor="?attr/colorOnPrimary" android:textSize="18sp" android:textStyle="bold"
             android:visibility="gone"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintTop_toTopOf="parent"/>

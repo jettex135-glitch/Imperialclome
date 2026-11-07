@@ -19,6 +19,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.imperialreader.R
 import com.imperialreader.data.backup.BackupManager
+import com.imperialreader.data.backup.BackupRestoreWorker
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.update.AppUpdateManager
 import com.imperialreader.ui.details.MangaDetailsActivity
@@ -72,15 +73,11 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
 
     private val restoreBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            viewLifecycleOwner.lifecycleScope.launch {
-                try {
-                    val n = BackupManager(requireContext()).restore(uri)
-                    requireContext().toast("Restored $n library entries")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    requireContext().toast("Restore failed: ${e.message}")
-                }
+            try {
+                BackupRestoreWorker.enqueue(requireContext(), uri)
+                requireContext().toast("Backup restore started. Progress is available in notifications.")
+            } catch (e: Exception) {
+                requireContext().toast("Could not start backup restore: ${e.message}")
             }
         }
     }
@@ -276,6 +273,9 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     override fun onResume() {
         super.onResume()
         if (::autoBackupSub.isInitialized) refreshAutomaticBackupText()
+        BackupRestoreWorker.consumeFallbackStatus(requireContext())?.let { status ->
+            requireContext().toast(status)
+        }
     }
 
     private fun refreshAutomaticBackupText() {

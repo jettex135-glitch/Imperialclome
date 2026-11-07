@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
 /** Popular + searchable grid for one EPUB / web-novel catalog. Tap a book to download it into the library. */
-class BookBrowseActivity : androidx.appcompat.app.AppCompatActivity() {
+class BookBrowseActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_SOURCE = "source_id"

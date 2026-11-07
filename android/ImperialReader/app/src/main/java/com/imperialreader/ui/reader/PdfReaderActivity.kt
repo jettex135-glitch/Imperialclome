@@ -34,7 +34,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import kotlin.math.min
 
-class PdfReaderActivity : androidx.appcompat.app.AppCompatActivity() {
+class PdfReaderActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"

@@ -57,7 +57,7 @@ object StartupStarAnimation {
     private class SparkleBurstView(activity: Activity) : View(activity) {
         private val density = resources.displayMetrics.density
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = activity.getColor(R.color.gold_light)
+            color = com.imperialreader.ui.theme.AppThemeManager.color(activity, com.google.android.material.R.attr.colorSecondary)
             style = Paint.Style.FILL
         }
         private var progress = 0f

@@ -173,13 +173,14 @@ private data class TitleGroup(
  * Default view: each TITLE once, with the chapters of all sources merged (most up-to-date count).
  * Untick "Combine" to see the per-source rows instead.
  */
-class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
+class GlobalSearchActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_QUERY = "query"
         private const val EXTRA_MIGRATION_FROM_ID = "migration_from_id"
         private const val EXTRA_MIGRATION_SOURCE_IDS = "migration_source_ids"
         private const val EXTRA_MIGRATION_COMBINED = "migration_combined"
+        private const val EXTRA_MIGRATION_EXTENSIONS = "migration_extensions"
         private const val REQUEST_SHOW_MIGRATION_ENTRY = 1
         private const val MAX_SOURCE_SEARCH_PAGES = 20
         private const val MAX_METADATA_SEARCH_PAGES = 5
@@ -196,12 +197,16 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
 
         fun combinedMigrationIntent(ctx: Context, manga: MangaEntity, sourceIds: Set<String>): Intent =
             migrationIntent(ctx, manga, sourceIds).putExtra(EXTRA_MIGRATION_COMBINED, true)
+
+        fun bookMigrationIntent(ctx: Context, manga: MangaEntity, sourceIds: Set<String>): Intent =
+            migrationIntent(ctx, manga, sourceIds).putExtra(EXTRA_MIGRATION_EXTENSIONS, true)
     }
 
     private var migrationFromId = -1L
     private var migrationSourceIds = emptySet<String>()
     private val migrationMode get() = migrationFromId >= 0L
     private var migrationCombinedMode = false
+    private var migrationExtensions = false
     private val sections = MutableStateFlow<List<SourceResult>>(emptyList())
     private val groups = MutableStateFlow<List<TitleGroup>>(emptyList())
     private val tick = MutableStateFlow(0)
@@ -250,6 +255,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         migrationFromId = intent.getLongExtra(EXTRA_MIGRATION_FROM_ID, -1L)
         migrationSourceIds = intent.getStringArrayListExtra(EXTRA_MIGRATION_SOURCE_IDS)?.toSet().orEmpty()
         migrationCombinedMode = intent.getBooleanExtra(EXTRA_MIGRATION_COMBINED, false)
+        migrationExtensions = intent.getBooleanExtra(EXTRA_MIGRATION_EXTENSIONS, false)
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.setNavigationOnClickListener { finish() }
         if (migrationMode) {
@@ -335,7 +341,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         val initial = intent.getStringExtra(EXTRA_QUERY).orEmpty()
         if (initial.isNotBlank()) {
             input.setText(initial)
-            if (migrationMode) runSearch(initial, extensions = false, selectedIds = migrationSourceIds)
+            if (migrationMode) runSearch(initial, extensions = migrationExtensions, selectedIds = migrationSourceIds)
             else beginSearch(initial)
         }
     }
@@ -667,7 +673,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun beginSearch(q: String) {
         if (migrationMode) {
-            runSearch(q, extensions = false, selectedIds = migrationSourceIds)
+            runSearch(q, extensions = migrationExtensions, selectedIds = migrationSourceIds)
             return
         }
         if (q.isBlank() && !hasSearchFilters()) {
@@ -717,7 +723,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         content.addView(TextView(this).apply {
             text = "Choose which ${if (extensions) "extensions" else "sources"} to query."
             textSize = 14f
-            setTextColor(getColor(R.color.on_surface_variant))
+            setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@GlobalSearchActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
         })
 
         val filterInput = EditText(this).apply {
@@ -736,7 +742,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
 
         val selectionCount = TextView(this).apply {
             textSize = 12f
-            setTextColor(getColor(R.color.on_surface_variant))
+            setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@GlobalSearchActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
             setPadding(dp(4), dp(4), 0, dp(4))
         }
         val selectAll = MaterialCheckBox(this).apply {
@@ -1736,7 +1742,36 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun onCardClick(section: SourceResult, card: CardItem) {
         when (val tag = card.tag) {
-            is BookItem -> BookActions.show(this, tag)
+            is BookItem -> if (migrationMode) {
+                val source = BookSources.get(tag.sourceId)
+                if (source?.isWebNovel != true) {
+                    toast("Only compatible web-novel extensions can be used for this migration")
+                } else {
+                    lifecycleScope.launch {
+                        val from = app.db.mangaDao().getById(migrationFromId)
+                        if (from == null) {
+                            toast("The entry being migrated is no longer available")
+                            finish()
+                        } else {
+                            showMigrationConfirmation(
+                                from = from,
+                                targetSourceId = source.id,
+                                target = SManga(
+                                    url = tag.id,
+                                    title = tag.title,
+                                    thumbnailUrl = tag.coverUrl,
+                                    author = tag.author,
+                                    artist = tag.artist,
+                                    description = tag.description,
+                                    genre = tag.genre
+                                )
+                            )
+                        }
+                    }
+                }
+            } else {
+                BookActions.show(this, tag)
+            }
             is Long -> startActivity(MangaDetailsActivity.intent(this, tag))
             is SManga -> if (migrationMode) {
                 val source = app.sources.get(section.sourceId)
@@ -1811,7 +1846,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
             addView(TextView(this@GlobalSearchActivity).apply {
                 text = target.title
                 textSize = 15f
-                setTextColor(getColor(R.color.on_surface))
+                setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@GlobalSearchActivity, com.google.android.material.R.attr.colorOnSurface))
             })
             listOfNotNull(target.author, target.artist)
                 .filter(String::isNotBlank)
@@ -1821,7 +1856,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     addView(TextView(this@GlobalSearchActivity).apply {
                         text = creators.joinToString(" • ")
                         textSize = 12f
-                        setTextColor(getColor(R.color.on_surface_variant))
+                        setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@GlobalSearchActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
                         setPadding(0, (4 * resources.displayMetrics.density).toInt(), 0, 0)
                     })
                 }
@@ -1830,7 +1865,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     text = description
                     maxLines = 3
                     textSize = 12f
-                    setTextColor(getColor(R.color.on_surface_variant))
+                    setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@GlobalSearchActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
                     setPadding(0, (4 * resources.displayMetrics.density).toInt(), 0, 0)
                 })
             }

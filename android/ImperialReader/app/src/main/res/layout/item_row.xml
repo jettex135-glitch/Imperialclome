@@ -12,11 +12,11 @@
         <TextView android:id="@+id/rowTitle"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:maxLines="2" android:ellipsize="end"
-            android:textColor="@color/on_surface" android:textSize="15sp" android:textStyle="bold"/>
+            android:textColor="?attr/colorOnSurface" android:textSize="15sp" android:textStyle="bold"/>
         <TextView android:id="@+id/rowSub"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="2dp" android:maxLines="2" android:ellipsize="end"
-            android:textColor="@color/on_surface_variant" android:textSize="13sp"/>
+            android:textColor="?attr/colorOnSurfaceVariant" android:textSize="13sp"/>
     </LinearLayout>
     <ImageButton android:id="@+id/rowAction"
         android:layout_width="44dp" android:layout_height="44dp"

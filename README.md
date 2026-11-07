@@ -26,7 +26,7 @@ For manga and comics, tap the reader to show controls. Choose left-to-right, rig
 ### Read your own files
 
 1. In **More → Storage folder**, choose a folder and grant access. Imperial Reader creates `local/`, `downloads/`, and `autobackup/` inside it.
-2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, or image subfolder is treated as a chapter. Supported archive formats include CBZ, ZIP, CBR, and RAR.
+2. Put local files under `local/<Title>/`. Supported chapters include image folders, CBZ/ZIP/CBR/RAR archives, PDF, EPUB, PSD, PSB, and CLIP files.
 3. Choose **More → Scan local library** to import or refresh your local titles.
 
 PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs, or browse supported web-novel catalogs including NovelArrow. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
@@ -46,14 +46,16 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 - Save titles to your library and group them into custom categories.
 - Search, sort, and filter library entries, including by unread chapters, bookmarks, and downloaded chapters.
-- Select multiple titles to move them between categories or remove them from the library.
+- Select multiple titles to move them between categories, remove them, or queue reviewed bulk migration matches. Manga, web-novel, and catalog-backed book entries use their compatible migration/import paths.
 - See unread and downloaded/local badges, with display options in Settings.
+- See series publication states as ongoing, completed, hiatus, or axed when a source provides status information.
 - Refresh a title's chapter list or update the library for new chapters.
 
 ### Read, track, and download
 
 - Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
+- Use double-tap zoom in the image reader. Direct MP4 pages play with native playback controls; MP4 chapter downloads are saved as video files.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
 - Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline.
 - Browse and read EPUBs and web novels, seek between EPUB sections, resume saved chapter/page progress, adjust text size and theme, and listen with device text-to-speech.
@@ -61,10 +63,11 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, and EPUB files as library titles.
+- Import local image folders and CBZ, ZIP, CBR/RAR (RAR 2–4), PDF, EPUB, PSD, PSB, and CLIP files as library titles. Photoshop and CLIP artwork is rendered from supported previews or decoded composites.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
 - Export or restore a JSON backup containing library titles, categories, chapter read/bookmark/progress state, and history. Restore merges with the current library rather than deleting it.
+- Run restores in the background and monitor progress or completion in the Android notification.
 - Create automatic backups manually or let the app run them periodically; it keeps a rolling set of the five most recent automatic backups.
 
 ## Settings
@@ -72,12 +75,14 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 Open **More → Settings** to configure:
 
 - Default manga/comic reading direction, screen-on behavior, fullscreen mode, edge taps, and volume-key navigation.
-- Library grid columns, unread/download badges, and refreshing the library on app start.
+- Choose Imperial, Ocean, Forest, Rose, or Android device colors; set the app to follow the system, light, or dark appearance. Theme colors use Material color roles across app screens without tinting cover artwork or reader pages.
+- App lock, library grid columns, unread/download badges, and automatic library updates.
+- Download concurrency, automatic app-update checks, automatic cover refresh, global-search concurrency/timeouts, and optional skipping of duplicate chapters and gaidens.
 - Cover extraction for local entries.
 - Visibility of adult sources and ratings.
 - Clearing cached images/archive data or saved site cookies.
 
-The EPUB reader has its own text-size controls, theme selector, seekable chapter progress, and text-to-speech button.
+The EPUB reader has its own text-size controls, light/dark/sepia theme selector, seekable chapter progress, and text-to-speech button. WEBTOON episodes can include audio when the source provides it; entries without audio remain image-only.
 
 ## Build from source
 
@@ -109,5 +114,7 @@ To build a release APK, run `gradle assembleRelease` from `android/ImperialReade
 ## Notes
 
 - The app depends on third-party websites and public catalog APIs. Site changes, network availability, regional restrictions, or anti-bot checks can affect browsing and downloads.
+- Imperial Reader does not run Mihon/Keiyoushi APK extensions; its **Extensions** tab contains its built-in book and web-novel catalogs. QiManga is present but its live API responses could not be verified because the service returned HTTP 403.
+- Application appearance is resource-based and separate from EPUB/PDF reader appearance. Cover artwork and comic pages are rendered without application theme tinting.
 - Use custom sources only with sites and material you are authorized to access. Adult sources are intended only for adults 18 and older.
 - Imperial Reader is an independent reader app and is not affiliated with the third-party catalogs it can access.

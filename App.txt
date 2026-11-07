@@ -1,0 +1,596 @@
+App adjustment(December)
+
+Imperial Reader — Focused Improvements, Extension Investigation & Release 
+
+Repository: https://github.com/Kvngz3n0/ImperialreaderApp
+Existing release: https://github.com/Kvngz3n0/ImperialreaderApp/releases/tag/V9
+
+I want you to investigate and implement the improvements listed below. Before making any changes, study the existing repository thoroughly, understand how its current architecture works, and investigate how applications such as QuickNovel retrieve, organise, search, and display webnovels.
+
+The purpose of studying QuickNovel is to understand its technical approach to webnovel discovery and retrieval, source integration, search handling, and content extraction. Compare those approaches with Imperial Reader's existing implementation and identify techniques that can be adapted without breaking the current architecture.
+
+Do not blindly copy another application's implementation. Study its publicly available architecture and behaviour, identify the relevant techniques, and adapt them appropriately.
+
+PHASE 1 — INVESTIGATION ONLY (NO CODE CHANGES)
+
+First, inspect the repository and investigate the following objectives.
+
+1. WEBTOON audio and MP3 compatibility
+
+For the "webtoon" source specifically:
+
+- Investigate entries that contain accompanying audio or sound.
+- Determine how the audio is represented, retrieved, and associated with individual episodes or panels.
+- Implement appropriate MP3/audio compatibility so that entries containing accompanying audio can play it correctly.
+- Preserve the existing image viewer and reading experience.
+- Ensure entries without audio continue working exactly as before.
+- Investigate whether audio is provided as MP3 or another format before deciding how to handle playback.
+
+Do not assume every WEBTOON entry contains audio.
+
+2. Correct migration handling for webnovels and EPUBs
+
+Investigate the existing entry migration implementation.
+
+Currently, migrating webnovels and ".epub" entries can incorrectly attempt to use manga sources.
+
+Correct this behaviour:
+
+- When migrating a webnovel, query and display compatible sources from the Extensions section.
+- When migrating an EPUB entry, use compatible extension/import handling rather than attempting to match it against manga sources.
+- Preserve the existing manga migration workflow for manga entries.
+- Ensure the destination search uses the correct content type and source.
+- Preserve relevant metadata wherever supported, including title, author, cover, description, reading progress, and library organisation.
+- Do not force incompatible formats into manga migration.
+
+3. NovelFire HTTP 429 errors
+
+Investigate why NovelFire currently fails when attempting to add entries, returning HTTP 429 or similar errors.
+Sometimes entries can be added sometimes not sometimes added entries load chapters sometimes not
+
+Determine whether the problem originates from:
+
+- Request frequency or rate limiting.
+- Incorrect request headers or user-agent handling.
+- Session, cookie, or authentication requirements.
+- An outdated source implementation.
+- Incorrect request sequencing or duplicated requests.
+- Network handling or source-specific restrictions.
+
+Implement an appropriate, respectful solution.
+
+Requirements:
+
+- Respect HTTP 429 responses and "Retry-After" when supplied.
+- Avoid aggressive repeated requests.
+- Avoid retry loops and unnecessary concurrent requests.
+- Preserve existing source functionality.
+- Do not attempt to bypass access restrictions or security challenges.
+
+4. Extensions search and functionality audit
+
+Investigate the entire Extensions section and every currently implemented extension.
+
+There are two search contexts to inspect:
+
+A. Extension browsing
+
+- Improve the search experience when searching and browsing available extensions.
+- Ensure extension discovery and filtering work correctly.
+- Check how extension names, metadata, categories, and search queries are processed.
+
+B. Global Search
+
+- Ensure extension-backed sources are properly included in Global Search.
+- Investigate why some extensions may not return results or may fail during searches.
+- Correct broken search implementations, query handling, source registration, or result parsing where evidence identifies a problem.
+- Ensure searches use the correct source-specific query formats.
+- Preserve source attribution and result links.
+
+Audit every existing extension rather than fixing only the first visible failure.
+
+Identify extensions that are:
+
+- Working correctly.
+- Partially functional.
+- Broken.
+- Unable to be verified because of external restrictions or unavailable services.
+
+Do not claim an extension works if you cannot verify it.
+
+5. Global Search crash and animation lag
+
+Investigate reports that Imperial Reader sometimes crashes when Global Search starts.
+
+The start animation can also lag or stutter.
+
+Determine whether this is caused by:
+
+- Excessive concurrent work.
+- Main-thread blocking.
+- UI recomposition or animation workload.
+- Search initialization.
+- Network callbacks or result processing.
+- Memory pressure.
+- Lifecycle or coroutine cancellation problems.
+- Exceptions from individual extensions.
+
+Pay particular attention to whether network activity is incorrectly blocking UI operations.
+
+Requirements:
+
+- Prevent individual source failures from crashing the entire search.
+- Keep UI animations responsive while searches initialise and execute.
+- Ensure coroutine cancellation and lifecycle handling are correct.
+- Avoid unnecessary UI-thread work.
+- Preserve the existing Global Search behaviour, layout, filters, and result presentation.
+- Do not reduce the existing five-operation global concurrency limit or introduce a separate concurrency pool.
+
+6. Aura Scans cover image extraction
+
+Investigate the Aura Scans source.
+
+Currently, the source appears to retrieve the entire ratings/status image or a larger composite image instead of extracting only the manga cover.
+
+Determine which image URL, HTML element, metadata field, or API response contains the actual cover.
+
+Correct extraction so that:
+
+- Only the actual cover image is used.
+- Ratings, status indicators, and unrelated surrounding graphics are excluded.
+- The cover is not unnecessarily cropped or distorted.
+- Chapter images and other source functionality remain unaffected.
+
+7. Organise extension results in Global Search
+
+When searching extensions through Global Search, results should be grouped and organised according to their respective sources.
+
+Currently, results appear in one continuous row/list.
+
+Implement source-based grouping so that:
+
+- Results are clearly separated by extension/source.
+- Each group identifies its source.
+- Results remain accessible and readable.
+- Existing result information, links, and metadata are preserved.
+- The existing results-only filtering and other Global Search behaviour remain intact.
+
+8. Backup restoration progress notification
+
+Investigate the existing backup and restoration implementation in Imperial Reader.
+
+Currently, I want to improve the feedback provided to users when restoring backups by introducing an Android notification with a visible progress bar.
+
+The objective is to allow users to monitor backup restoration progress through the Android notification panel instead of having to remain on the restoration screen.
+
+Investigation requirements
+
+Before implementing anything, investigate:
+
+- How Imperial Reader currently creates and manages backups.
+- How backup restoration is initiated and executed.
+- Which classes, services, repositories, and background workers handle restoration.
+- Whether restoration currently runs synchronously or asynchronously.
+- How restoration processes individual files, database records, images, chapters, and other backed-up data.
+- Whether the existing restoration implementation exposes progress information.
+- Whether restoration can continue when the application moves into the background.
+- Whether Android notification channels and permissions are already implemented elsewhere in the application.
+
+Implementation requirements
+
+Implement a progress notification specifically for backup restoration.
+
+The notification should:
+
+1. Appear automatically when a backup restoration operation begins.
+2. Display a progress bar showing the restoration progress.
+3. Display a percentage when the total restoration workload can be determined.
+4. Update progressively as restoration advances.
+5. Include a descriptive notification title, such as "Restoring Backup".
+6. Include useful progress information, such as the percentage completed or the current restoration stage, where available.
+7. Remain visible while restoration is ongoing, including when the user leaves the restoration screen.
+8. Update to indicate successful completion when restoration finishes.
+9. Clearly communicate restoration failures if an error occurs.
+10. Be dismissed or updated appropriately when the operation terminates.
+
+Progress tracking
+
+- Use genuine progress information from the restoration process.
+- Do not simulate progress using arbitrary timers or fabricated percentages.
+- If the total workload is unknown, use an indeterminate progress indicator until meaningful progress information becomes available.
+- Where possible, track progress across the actual restoration workload rather than simply measuring the time elapsed.
+- Avoid excessive notification updates that could unnecessarily consume resources.
+- Ensure progress updates are thread-safe and do not interfere with restoration operations.
+
+Android compatibility
+
+- Use the appropriate Android notification APIs and existing application architecture.
+- Investigate whether a foreground service or an existing background-work mechanism is appropriate for long-running restoration operations.
+- Respect Android notification permission requirements, including Android 13 and later.
+- If a foreground service is necessary, implement its notification and lifecycle correctly.
+- Preserve compatibility with the application's existing minimum and target SDK configurations.
+- Ensure notification handling does not introduce memory leaks or prevent restoration from completing.
+
+Preservation requirements
+
+- Do not change the existing backup format.
+- Do not alter backup creation functionality.
+- Do not change the existing restoration workflow unnecessarily.
+- Do not introduce a new backup system.
+- Do not modify unrelated notification functionality.
+- Preserve existing backup compatibility and restoration behaviour.
+- Ensure restoration continues to work when notification permission is unavailable, using an appropriate fallback rather than unnecessarily blocking the operation.
+
+The notification must accurately reflect the actual restoration operation. It must not report successful completion until restoration has genuinely finished.
+
+Do not redesign unrelated parts of Global Search.
+
+---
+
+PHASE 2 — REQUIRED INVESTIGATION REPORT
+
+Before editing anything, provide a report containing:
+
+1. The relevant files, classes, source implementations, and architecture involved in each objective.
+2. How Imperial Reader currently handles manga sources, extensions, webnovels, EPUBs, migration, and Global Search.
+3. What you discovered about QuickNovel's webnovel retrieval and source architecture.
+4. The specific differences between QuickNovel's approach and Imperial Reader's current implementation.
+5. The cause of each identified bug, with evidence from the code or reproducible tests.
+6. A proposed implementation plan for each objective.
+7. Potential compatibility risks and regression risks.
+8. How you intend to test every change.
+9. Any objective that cannot currently be verified because of external source restrictions.
+
+Do not modify, create, delete, refactor, or reformat any project files during this phase.
+
+Do not start implementation until I have reviewed the report and explicitly approved the plan.
+
+---
+
+PHASE 3 — IMPLEMENTATION AFTER APPROVAL
+
+Once I approve the investigation and implementation plan:
+
+- Implement only the seven objectives listed above.
+- Preserve all previous implementations, fixes, and adjustments.
+- Reuse existing architecture and components wherever possible.
+- Make the smallest necessary changes.
+- Do not perform unrelated refactoring.
+- Do not replace working source implementations without evidence that replacement is necessary.
+- Do not modify unrelated extensions, sources, UI screens, settings, navigation, reader behaviour, or application functionality.
+- Do not introduce new features that are not explicitly required above.
+
+If an existing implementation must be modified to satisfy one of these objectives, limit the modification to the smallest relevant area.
+
+Regression protection
+
+After implementation, verify that:
+
+- Manga sources still search and load correctly.
+- Webnovel extensions still search and load correctly.
+- EPUB entries remain compatible with their intended migration/import workflow.
+- Existing manga migration still works.
+- NovelFire handles rate limits appropriately.
+- WEBTOON entries with and without audio still work.
+- Global Search still respects its existing five-operation concurrency limit.
+- Global Search results, filters, retries, and source attribution remain intact.
+- The search start animation remains responsive.
+- Aura Scans retrieves the correct cover.
+- Extension results are grouped by source.
+- No unrelated functionality has regressed.
+
+Run the available tests and build checks. Report any tests that could not be executed.
+
+---
+
+PHASE 4 — APK BUILD AND EXISTING GITHUB RELEASE
+
+After all approved changes have been implemented and tested:
+
+1. Build the Android APK using the repository's existing build configuration.
+
+2. Verify that the APK installs and that the existing signing configuration is preserved.
+
+3. Confirm that the build does not introduce an unintended version change.
+
+4. Publish the resulting APK to the existing GitHub release:
+
+   https://github.com/Kvngz3n0/ImperialreaderApp/releases/tag/V9
+
+STRICT RELEASE REQUIREMENTS
+
+- Do not create a new GitHub release.
+- Do not rename the existing release.
+- Do not change the existing release title.
+- Do not create a new version or release tag.
+- Do not increment "versionCode".
+- Do not increment "versionName".
+- Do not make unrelated Gradle or build configuration changes.
+- Replace/update the APK asset in the existing V9 release rather than publishing a new release.
+- Preserve the existing release notes and other assets.
+- If GitHub does not allow replacing the existing asset directly, explain the limitation and request approval before removing or replacing any release asset.
+
+The intention is to update the existing V9 release with the new APK, not to create another versioned release.
+
+---
+
+ABSOLUTE SCOPE RESTRICTION
+
+Work exclusively on the objectives listed in this prompt.
+
+Do not:
+
+- Redesign the application.
+- Change the UI outside the explicitly requested extension-result grouping.
+- Change unrelated source implementations.
+- Add or remove extensions for convenience.
+- Change existing reader functionality.
+- Change existing navigation or library behaviour.
+- Change unrelated settings.
+- Refactor unrelated code.
+- Rename the release.
+- Increase the application version.
+- Make additional improvements simply because you notice something else.
+
+If you discover another issue outside this scope, document it separately. Do not fix it.
+
+ADDITIONAL OBJECTIVES — IMPERIAL READER
+
+The following objectives extend the original seven objectives and the backup restoration notification.
+
+These are additional requirements, not replacements for any existing objectives.
+
+9. Mass Migration (Bulk Entry Migration)
+
+Investigate the existing library selection, entry migration, and source-search implementations.
+
+I want to introduce the ability to migrate multiple library entries in a single operation rather than having to migrate each entry individually.
+
+Requirements
+
+A. Multiple entry selection
+
+- Allow users to select multiple entries from their library.
+- Display the total number of selected entries.
+- Preserve the existing selection behaviour where possible.
+- Allow users to select and deselect individual entries.
+- Provide an appropriate select-all option where supported.
+- Allow users to exit selection mode without performing an operation.
+
+B. Bulk migration
+
+Introduce a mass migration operation that processes multiple selected entries.
+
+The implementation must:
+
+- Support migrating multiple manga entries.
+- Support migrating multiple webnovel entries.
+- Handle EPUB entries using their appropriate import or extension compatibility mechanisms.
+- Never attempt to migrate incompatible content types through manga sources.
+- Reuse the existing individual migration implementation wherever possible.
+- Preserve relevant metadata, including titles, authors, descriptions, covers, categories, and reading progress wherever supported.
+- Preserve existing library organisation.
+- Avoid duplicate entries where possible.
+
+C. Migration processing
+
+- Process multiple migrations reliably.
+- Avoid excessive concurrent requests to external sources.
+- Reuse existing concurrency controls where applicable.
+- Handle individual migration failures without automatically terminating the entire batch.
+- Provide a summary of successful, failed, skipped, and pending migrations.
+- Allow users to identify which entries failed and why.
+- Avoid silently discarding entries that could not be migrated.
+- Prevent duplicate migration operations caused by repeated user input.
+
+D. Migration results
+
+After processing, provide a clear summary of the operation.
+
+Users should be able to identify:
+
+- Successfully migrated entries.
+- Entries that could not be matched.
+- Entries that encountered errors.
+- Entries that were skipped.
+- Entries requiring manual migration.
+
+Do not silently remove original library entries when a migration fails.
+
+10. Mass Migration Window and Interface
+
+Introduce a dedicated mass migration window/dialog for managing bulk migration operations.
+
+Study the existing migration interface and reuse its components and functionality wherever possible.
+
+The migration window should provide:
+
+A. Selected entries
+
+- Display all entries selected for migration.
+- Show their titles and cover images.
+- Clearly identify their content types.
+- Display the number of entries being migrated.
+- Allow individual entries to be removed from the migration queue before processing.
+
+B. Destination source selection
+
+- Present compatible destination sources.
+- Organise available sources according to content type.
+- Ensure manga, webnovels, and EPUB entries use appropriate migration mechanisms.
+- Allow users to search available compatible sources.
+- Display the selected destination source clearly.
+
+C. Matching and migration
+
+Where possible, provide matching results for the selected entries.
+
+- Display the original entry and its proposed destination match.
+- Allow users to review matches before confirming migration.
+- Allow users to correct an incorrect match.
+- Clearly identify entries without a suitable match.
+- Do not automatically approve uncertain matches.
+
+D. Migration progress
+
+During mass migration:
+
+- Display the overall migration progress.
+- Display how many entries have been completed.
+- Display how many remain.
+- Identify the entry currently being processed.
+- Show individual migration statuses.
+- Allow the user to understand whether migration is still running, completed, partially completed, or failed.
+
+Do not fabricate progress percentages.
+
+E. Completion
+
+Once the operation finishes, display a migration summary.
+
+Provide appropriate actions for viewing successful migrations, reviewing failed entries, and returning to the library.
+
+Do not introduce unnecessary changes to the existing individual migration workflow.
+
+11. Library and Extension UI Improvements
+Study mihons latest ui update . 
+
+A. Extension management interface
+
+Use the first screenshot as a reference for extension organisation.
+
+Investigate the existing Extensions screen and improve its presentation.
+
+Where compatible with the current architecture, introduce:
+
+- A cleaner vertically organised extension list.
+- Clearly visible extension icons.
+- Extension names and language indicators.
+- Better spacing and separation between extension entries.
+- Clearer extension selection and management controls.
+- Reordering support where the existing extension architecture permits it.
+- A more intuitive confirmation/continue action where applicable.
+
+Preserve existing extension functionality, installation handling, language filtering, search, and source registration.
+
+Do not remove existing extension capabilities simply to reproduce the UI 
+Do not clone mihons colour scheme maintain the original base ui
+
+
+B. Library selection and management interface
+Study mihons latest ui interface and 
+Improve the library interface with particular attention to:
+
+- Multiple selection mode.
+- A visible selected-entry counter.
+- Consistent cover presentation.
+- Accessible selection indicators.
+- A contextual action menu for selected entries.
+- A bottom action bar or equivalent management controls.
+
+The contextual menu should expose relevant existing actions, including migration and deletion, where appropriate.
+
+Integrate the newly introduced mass migration functionality into this interface.
+
+The user should be able to select several library entries and initiate mass migration without having to open each entry individually.
+
+C. UI preservation
+
+- Preserve Imperial Reader's current colour scheme.
+- Preserve its existing typography unless a change is necessary for compatibility with the requested layout.
+- Preserve existing navigation and reader functionality.
+- Retain existing library filtering and categorisation.
+- Avoid redesigning unrelated screens.
+- Reuse existing UI components and design conventions.
+- Maintain compatibility with different Android screen sizes and orientations.
+
+The objective is to improve usability and organisation, not replace Imperial Reader's identity with another application's design.
+
+12. Custom Application-Wide Colour Themes
+
+Introduce a custom colour theme system that allows users to personalise the appearance of Imperial Reader throughout the application.
+
+The existing Imperial Reader colour scheme must remain the default theme.
+
+A. Theme customisation
+
+Allow users to create and customise their own colour themes.
+
+Investigate the existing theming implementation before deciding how to integrate this functionality.
+
+The customisation system should support relevant application-wide colour properties, including:
+
+- Primary colour.
+- Secondary colour.
+- Accent colour.
+- Background colour.
+- Surface and card colours.
+- Primary text colour.
+- Secondary text colour.
+- Navigation and system bar colours where supported.
+- Other relevant theme colours used throughout the application.
+
+Ensure that colours remain visually coherent and that text and interface elements remain readable.
+
+B. Theme management
+
+Provide a dedicated theme customisation section in the application's settings.
+
+Users should be able to:
+
+- View the currently active theme.
+- Choose from available built-in themes, if supported.
+- Create a custom theme.
+- Modify individual theme colours.
+- Preview changes before applying them.
+- Save custom themes.
+- Rename custom themes.
+- Switch between saved themes.
+- Restore the original Imperial Reader default theme.
+- Delete custom themes.
+
+Do not allow users to accidentally delete the application's default theme.
+
+C. Application-wide application
+
+Custom themes must be applied consistently across the entire application.
+
+Investigate all relevant UI components and screens, including:
+
+- Home and library screens.
+- Manga, manhwa, and comics categories.
+- Webnovel and EPUB interfaces.
+- Reader interfaces.
+- Extension management.
+- Global Search.
+- Migration interfaces.
+- Backup and restoration interfaces.
+- Settings.
+- Dialogs, menus, bottom sheets, and notifications where customisation is supported.
+
+Avoid hardcoded colours that prevent custom themes from being applied.
+
+Where existing components use hardcoded colours, replace them with appropriate references to the application's central theme system, but only within the scope necessary to support application-wide theming.
+
+D. Persistence and compatibility
+
+- Save custom themes persistently.
+- Restore the user's selected theme after restarting the application.
+- Ensure theme changes are reflected without requiring an application restart wherever possible.
+- Preserve the selected theme when updating the application.
+- Do not modify existing library data or backup formats unnecessarily.
+- Ensure theme customisation does not interfere with system dark/light mode behaviour.
+- Provide appropriate handling for existing installations that have no saved theme preference.
+
+E. Theme safety and consistency
+
+- Maintain sufficient contrast between text and backgrounds.
+- Ensure icons and interactive elements remain visible.
+- Avoid applying custom colours to content images or manga artwork.
+- Preserve the readability of the reader.
+- Ensure dialogs, menus, and overlays follow the active theme.
+- Avoid inconsistencies where some screens use the custom theme and others retain unrelated hardcoded colours.
+
+The default Imperial Reader theme must remain available as a permanent fallback.
+
+Implement the nessary changes and Build the apk and publish to V9 release section

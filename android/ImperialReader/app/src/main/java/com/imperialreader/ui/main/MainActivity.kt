@@ -28,7 +28,7 @@ import com.imperialreader.ui.library.LibraryFragment
 import com.imperialreader.ui.more.MoreFragment
 import com.imperialreader.ui.updates.UpdatesFragment
 
-class MainActivity : androidx.appcompat.app.AppCompatActivity() {
+class MainActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
     private var startupAnimationPending = false
 
     companion object {

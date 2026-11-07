@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Verify Android Kotlin compilation",
+			"type": "shell",
+			"command": "export JAVA_HOME=/tmp/build-tools/jdk17 ANDROID_HOME=/tmp/android-sdk ANDROID_SDK_ROOT=/tmp/android-sdk; export PATH=\"$JAVA_HOME/bin:/tmp/build-tools/gradle-8.2/bin:$PATH\"; cd android/ImperialReader && gradle :app:compileDebugKotlin --offline --no-daemon --max-workers=1 -Dkotlin.compiler.execution.strategy=in-process",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

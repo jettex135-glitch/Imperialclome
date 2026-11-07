@@ -32,7 +32,7 @@
     <TextView android:id="@+id/readerError"
         android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_gravity="center" android:gravity="center" android:padding="32dp"
-        android:textColor="@color/on_surface_variant" android:visibility="gone"/>
+        android:textColor="?attr/colorOnSurfaceVariant" android:visibility="gone"/>
 
     <LinearLayout android:id="@+id/readerTop"
         android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -53,7 +53,7 @@
             <TextView android:id="@+id/readerSubtitle"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:maxLines="1" android:ellipsize="end"
-                android:textColor="@color/on_surface_variant" android:textSize="13sp"/>
+                android:textColor="?attr/colorOnSurfaceVariant" android:textSize="13sp"/>
         </LinearLayout>
     </LinearLayout>
 

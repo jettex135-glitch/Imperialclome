@@ -15,11 +15,11 @@
         <TextView android:id="@+id/queueTitle"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:maxLines="1" android:ellipsize="end"
-            android:textColor="@color/on_surface" android:textSize="14sp" android:textStyle="bold"/>
+            android:textColor="?attr/colorOnSurface" android:textSize="14sp" android:textStyle="bold"/>
         <TextView android:id="@+id/queueDetail"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:layout_marginTop="2dp" android:maxLines="1" android:ellipsize="end"
-            android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+            android:textColor="?attr/colorOnSurfaceVariant" android:textSize="12sp"/>
         <ProgressBar android:id="@+id/queueProgress"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent" android:layout_height="4dp"

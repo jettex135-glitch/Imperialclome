@@ -15,7 +15,7 @@ data class SManga(
     var artist: String? = null,
     var description: String? = null,
     var genre: String? = null,
-    /** 0 unknown, 1 ongoing, 2 completed, 3 hiatus/cancelled */
+    /** 0 unknown, 1 ongoing, 2 completed, 3 hiatus, 4 axed/cancelled */
     var status: Int = 0
 )
 
@@ -36,6 +36,14 @@ data class ChapterPages(
     val audioUrl: String? = null
 )
 
+/** One way to watch an episode (e.g. a SUB or DUB server). The stream is only resolved when the option is picked. */
+data class VideoOption(
+    val label: String,
+    val dub: Boolean,
+    val useWebView: Boolean = false,
+    val resolve: suspend () -> ChapterPages
+)
+
 /** Contract every built-in or custom source implements. */
 interface Source {
     val id: String
@@ -45,6 +53,9 @@ interface Source {
 
     /** Adult (18+) site: hidden unless "Show 18+" is enabled in Settings. */
     val nsfw: Boolean get() = false
+
+    /** Video source: a title is an anime and its "chapters" are episodes. Only changes wording and the player. */
+    val isAnime: Boolean get() = false
 
     suspend fun getPopular(page: Int): MangasPage
     suspend fun getLatest(page: Int): MangasPage
@@ -96,6 +107,9 @@ interface Source {
         return MangasPage(matches, popular.hasNextPage)
     }
     suspend fun getChapters(manga: SManga): List<SChapter>
+
+    /** Anime sources: the sub/dub servers of one episode. Empty = fall back to [loadPages]. */
+    suspend fun getVideoOptions(chapter: SChapter): List<VideoOption> = emptyList()
     suspend fun getPages(chapter: SChapter): List<String>
 
     /** Same as [getPages] but also returns the image headers. Combined sources override this. */

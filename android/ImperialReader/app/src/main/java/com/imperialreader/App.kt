@@ -18,6 +18,7 @@ import com.imperialreader.data.source.SourceManager
 import com.imperialreader.data.storage.StorageManager
 import com.imperialreader.data.update.LibraryRefreshConcurrencyController
 import com.imperialreader.security.AppLockManager
+import com.imperialreader.ui.theme.AppThemeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +53,7 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        AppThemeManager.initialize(this)
         registerActivityLifecycleCallbacks(appLockManager)
         applicationScope.launch {
             try {
