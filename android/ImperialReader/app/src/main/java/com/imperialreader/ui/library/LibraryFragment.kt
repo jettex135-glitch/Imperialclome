@@ -1,17 +1,6 @@
 package com.imperialreader.ui.library
 
-import android.content.res.ColorStateList
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.ColorFilter
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.PixelFormat
-import android.graphics.RectF
-import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
@@ -29,14 +18,13 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
-import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.tabs.TabLayout
 import com.imperialreader.R
-import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.db.CategoryEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.LibraryItem
+import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.ui.browse.GlobalSearchActivity
 import com.imperialreader.ui.common.CardItem
 import com.imperialreader.ui.common.LibraryActions
@@ -62,6 +50,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private var categories: List<CategoryEntity> = emptyList()
     private var visibleItems: List<LibraryItem> = emptyList()
     private var selectionMode = false
+    private var libraryRefreshInProgress = false
     private val selectedIds = linkedSetOf<Long>()
 
     private lateinit var adapter: MangaCardAdapter
@@ -93,12 +82,16 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             },
             onLongClick = { item ->
                 val id = item.tag as Long
-                if (id in selectedIds) showSelectionActions() else toggleSelection(id)
-            },
-            onTitleLongClick = { item ->
-                val clipboard = requireContext().getSystemService(ClipboardManager::class.java)
-                clipboard.setPrimaryClip(ClipData.newPlainText("Title", item.title))
-                requireContext().toast("Title copied")
+                if (selectionMode) {
+                    if (id in selectedIds) showItemMenu(id, item.title)
+                    else toggleSelection(id)
+                } else {
+                    selectionMode = true
+                    selectedIds.clear()
+                    selectedIds.add(id)
+                    updateSelectionMenu()
+                    tick.value = tick.value + 1
+                }
             }
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
@@ -177,18 +170,25 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         btnGlobal.setOnClickListener { openGlobal(query.value) }
 
         swipe.setOnRefreshListener {
+            swipe.isRefreshing = false
+            if (libraryRefreshInProgress) return@setOnRefreshListener
+            libraryRefreshInProgress = true
             viewLifecycleOwner.lifecycleScope.launch {
-                sprite.start()
+                sprite.start(speed = 1.5f)
                 try {
-                    val n = app.repo.updateLibrary()
+                    LibraryRefreshNotification.show(requireContext(), 0, 0)
+                    val n = app.repo.updateLibrary(onProgress = { done, total ->
+                        LibraryRefreshNotification.show(requireContext(), done, total)
+                    })
                     requireContext().toast(if (n > 0) "$n new chapter(s)" else "Library is up to date")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     requireContext().toast("Update failed: ${e.message}")
                 } finally {
+                    LibraryRefreshNotification.clear(requireContext())
                     sprite.stop()
-                    swipe.isRefreshing = false
+                    libraryRefreshInProgress = false
                 }
             }
         }
@@ -418,24 +418,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         tick.value = tick.value + 1
     }
 
-    private fun showSelectionActions() {
-        MaterialAlertDialogBuilder(requireContext())
-            .setItems(arrayOf("Mark as read", "Mark as unread", "Select all", "Cancel selection")) { _, which ->
-                when (which) {
-                    0 -> markSelectedReadState(true)
-                    1 -> markSelectedReadState(false)
-                    2 -> {
-                        selectedIds.addAll(visibleItems.map { it.manga.id })
-                        selectionMode = selectedIds.isNotEmpty()
-                        updateSelectionMenu()
-                        tick.value = tick.value + 1
-                    }
-                    3 -> cancelSelection()
-                }
-            }
-            .show()
-    }
-
     private fun cancelSelection() {
         selectionMode = false
         selectedIds.clear()
@@ -517,38 +499,54 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun showItemMenu(mangaId: Long, title: String) {
         val ctx = requireContext()
-        val options = arrayOf("Select for bulk actions", "Mark as read", "Mark as unread", "Change category", "Remove from library")
+        val options = arrayOf(
+            "Mark as read",
+            "Mark as unread",
+            "Select all",
+            "Cancel selection",
+            "Change category",
+            "Remove from library"
+        )
         MaterialAlertDialogBuilder(ctx)
             .setTitle(title)
             .setItems(options) { _, which ->
-                if (which == 0) {
-                    selectionMode = true
-                    selectedIds.add(mangaId)
+                if (which == 2) {
+                    val ids = visibleItems.map { it.manga.id }
+                    selectedIds.addAll(ids)
+                    selectionMode = selectedIds.isNotEmpty()
                     updateSelectionMenu()
                     tick.value = tick.value + 1
+                    return@setItems
+                }
+                if (which == 3) {
+                    cancelSelection()
+                    return@setItems
+                }
+                val ids = selectedIds.toList().ifEmpty { listOf(mangaId) }
+                if (which == 0 || which == 1) {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        val dao = ctx.app.db.chapterDao()
+                        ids.chunked(400).forEach { dao.setReadForManga(it, which == 0) }
+                        ctx.toast("Marked ${ids.size} entr${if (ids.size == 1) "y" else "ies"} as ${if (which == 0) "read" else "unread"}")
+                        cancelSelection()
+                    }
                     return@setItems
                 }
                 viewLifecycleOwner.lifecycleScope.launch {
                     val db = ctx.app.db
                     val manga = db.mangaDao().getById(mangaId) ?: return@launch
                     when (which) {
-                        1 -> {
-                            db.chapterDao().setReadForManga(mangaId, true)
-                            ctx.toast("Marked all chapters as read")
+                        4 -> {
+                            val picked = LibraryActions.chooseCategory(ctx, manga.categoryId) ?: return@launch
+                            ids.chunked(400).forEach { db.mangaDao().setCategory(it, picked) }
+                            cancelSelection()
                         }
-                        2 -> {
-                            db.chapterDao().setReadForManga(mangaId, false)
-                            ctx.toast("Marked all chapters as unread")
-                        }
-                        3 -> {
-                            val picked = LibraryActions.chooseCategory(ctx, manga.categoryId)
-                            if (picked != null) db.mangaDao().setCategory(mangaId, picked)
-                        }
-                        4 -> showRemoveOptions(1) { deleteDownloads ->
+                        5 -> showRemoveOptions(ids.size) { deleteDownloads ->
                             viewLifecycleOwner.lifecycleScope.launch {
                                 try {
-                                    removeEntries(listOf(mangaId), deleteDownloads)
-                                    ctx.toast("Removed from library")
+                                    removeEntries(ids, deleteDownloads)
+                                    ctx.toast("Removed ${ids.size} entr${if (ids.size == 1) "y" else "ies"} from library")
+                                    cancelSelection()
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
@@ -568,13 +566,18 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         val prefs = requireContext().app.prefs
         var list = items.filter { q.isBlank() || it.manga.title.contains(q, ignoreCase = true) }
         if (category >= 0) list = list.filter { it.manga.categoryId == category }
-        val isUnread = { item: LibraryItem -> item.unread > 0 }
-        val isBookmarked = { item: LibraryItem -> item.bookmarked > 0 }
-        val isDownloaded = { item: LibraryItem -> item.downloadedCount > 0 || item.manga.source == LOCAL_SOURCE_ID }
-        list = applyFilterMode(list, prefs.filterUnreadMode, isUnread)
-        list = applyFilterMode(list, prefs.filterDownloadedMode, isDownloaded)
-        list = applyFilterMode(list, prefs.filterBookmarkedMode, isBookmarked)
+        fun filter(mode: Int, matches: (LibraryItem) -> Boolean) {
+            when (mode) {
+                com.imperialreader.data.AppPrefs.FILTER_INCLUDE -> list = list.filter(matches)
+                com.imperialreader.data.AppPrefs.FILTER_EXCLUDE -> list = list.filterNot(matches)
+            }
+        }
+        filter(prefs.unreadFilterMode) { it.unread > 0 }
+        filter(prefs.bookmarkedFilterMode) { it.bookmarked > 0 }
+        val isDownloaded: (LibraryItem) -> Boolean =
+            { it.downloadedCount > 0 || it.manga.source == LOCAL_SOURCE_ID }
         if (prefs.downloadedOnly) list = list.filter(isDownloaded)
+        filter(prefs.downloadedFilterMode, isDownloaded)
         return when (prefs.sortMode) {
             1 -> list.sortedByDescending { it.lastRead ?: 0L }
             2 -> list.sortedByDescending { it.unread }
@@ -590,7 +593,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         return CardItem(
             key = "m${m.id}",
             title = m.title,
-            cover = m.coverUrl,
+            cover = m.displayCoverUrl,
             badge1 = if (prefs.showUnreadBadge && item.unread > 0) item.unread.toString() else null,
             badge2 = if (!prefs.showDownloadBadge) null else when {
                 m.source == LOCAL_SOURCE_ID -> "Local"
@@ -611,38 +614,47 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private fun showFilterDialog() {
         val prefs = requireContext().app.prefs
         val context = requireContext()
-        val filters = LinearLayout(context).apply {
+        val rows = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(context.dp(24), context.dp(8), context.dp(24), 0)
+            setPadding(context.dp(24), context.dp(8), context.dp(24), context.dp(8))
         }
-        fun addFilter(label: String, initial: Int, update: (Int) -> Unit) {
-            var mode = initial
-            val drawable = FilterStateDrawable(context.dp(24), mode)
-            val checkbox = MaterialCheckBox(context).apply {
-                text = label
-                buttonDrawable = drawable
-                buttonTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-                isChecked = false
-                setOnClickListener {
-                    mode = when (mode) {
-                        AppPrefs.FILTER_NONE -> AppPrefs.FILTER_INCLUDE
-                        AppPrefs.FILTER_INCLUDE -> AppPrefs.FILTER_EXCLUDE
-                        else -> AppPrefs.FILTER_NONE
-                    }
-                    drawable.mode = mode
-                    isChecked = false
-                    update(mode)
-                    tick.value = tick.value + 1
-                }
+        val states = listOf("— Off", "✓ Include", "× Exclude")
+        val getMode = listOf(
+            { prefs.unreadFilterMode },
+            { prefs.downloadedFilterMode },
+            { prefs.bookmarkedFilterMode }
+        )
+        val setMode: List<(Int) -> Unit> = listOf(
+            { prefs.unreadFilterMode = it },
+            { prefs.downloadedFilterMode = it },
+            { prefs.bookmarkedFilterMode = it }
+        )
+        listOf("Unread", "Downloaded", "Bookmarked").forEachIndexed { index, title ->
+            val status = Button(context)
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, context.dp(4), 0, context.dp(4))
             }
-            filters.addView(checkbox, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            row.addView(TextView(context).apply {
+                text = title
+                textSize = 16f
+            }, LinearLayout.LayoutParams(0, context.dp(48), 1f))
+            row.addView(status, LinearLayout.LayoutParams(context.dp(120), context.dp(48)))
+            fun updateStatus() {
+                status.text = states[getMode[index]().coerceIn(states.indices)]
+            }
+            updateStatus()
+            status.setOnClickListener {
+                setMode[index]((getMode[index]() + 1) % states.size)
+                updateStatus()
+                tick.value = tick.value + 1
+            }
+            rows.addView(row)
         }
-        addFilter("Unread", prefs.filterUnreadMode) { prefs.filterUnreadMode = it }
-        addFilter("Downloaded", prefs.filterDownloadedMode) { prefs.filterDownloadedMode = it }
-        addFilter("Bookmarked", prefs.filterBookmarkedMode) { prefs.filterBookmarkedMode = it }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle("Filter")
-            .setView(filters)
+            .setView(rows)
             .setPositiveButton("Done", null)
             .show()
     }
@@ -660,71 +672,4 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             }
             .show()
     }
-}
-
-private fun <T> applyFilterMode(items: List<T>, mode: Int, predicate: (T) -> Boolean): List<T> = when (mode) {
-    AppPrefs.FILTER_INCLUDE -> items.filter(predicate)
-    AppPrefs.FILTER_EXCLUDE -> items.filterNot(predicate)
-    else -> items
-}
-
-private class FilterStateDrawable(
-    private val sizePx: Int,
-    mode: Int
-) : Drawable() {
-    var mode: Int = mode
-        set(value) {
-            field = value
-            invalidateSelf()
-        }
-
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-
-    override fun draw(canvas: Canvas) {
-        val bounds = bounds
-        val side = minOf(bounds.width(), bounds.height(), sizePx).toFloat()
-        if (side <= 0f) return
-        val left = bounds.left + (bounds.width() - side) / 2f
-        val top = bounds.top + (bounds.height() - side) / 2f
-        val inset = side * 0.12f
-        val box = RectF(left + inset, top + inset, left + side - inset, top + side - inset)
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = (side * 0.08f).coerceAtLeast(1f)
-        paint.color = if (mode == AppPrefs.FILTER_NONE) 0xFF909090.toInt() else 0xFFC9A354.toInt()
-        canvas.drawRoundRect(box, side * 0.12f, side * 0.12f, paint)
-        if (mode == AppPrefs.FILTER_NONE) return
-
-        val mark = Path()
-        if (mode == AppPrefs.FILTER_INCLUDE) {
-            mark.moveTo(left + side * 0.27f, top + side * 0.52f)
-            mark.lineTo(left + side * 0.44f, top + side * 0.68f)
-            mark.lineTo(left + side * 0.74f, top + side * 0.34f)
-        } else {
-            mark.moveTo(left + side * 0.34f, top + side * 0.34f)
-            mark.lineTo(left + side * 0.66f, top + side * 0.66f)
-            mark.moveTo(left + side * 0.66f, top + side * 0.34f)
-            mark.lineTo(left + side * 0.34f, top + side * 0.66f)
-        }
-        paint.color = 0xFFFFF8E8.toInt()
-        canvas.drawPath(mark, paint)
-    }
-
-    override fun setAlpha(alpha: Int) {
-        paint.alpha = alpha
-        invalidateSelf()
-    }
-
-    override fun setColorFilter(colorFilter: ColorFilter?) {
-        paint.colorFilter = colorFilter
-        invalidateSelf()
-    }
-
-    @Deprecated("Deprecated in Android")
-    override fun getOpacity() = PixelFormat.TRANSLUCENT
-
-    override fun getIntrinsicWidth() = sizePx
-    override fun getIntrinsicHeight() = sizePx
 }

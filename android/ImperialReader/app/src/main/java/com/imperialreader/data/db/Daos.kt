@@ -48,6 +48,9 @@ interface MangaDao {
     @Query("UPDATE manga SET categoryId = :categoryId WHERE id = :id")
     suspend fun setCategory(id: Long, categoryId: Long)
 
+    @Query("UPDATE manga SET customCoverUri = :uri WHERE id = :id")
+    suspend fun setCustomCover(id: Long, uri: String?)
+
     @Query("UPDATE manga SET categoryId = :categoryId WHERE id IN (:ids)")
     suspend fun setCategory(ids: List<Long>, categoryId: Long)
 
@@ -117,12 +120,22 @@ interface ChapterDao {
     @Query("UPDATE chapters SET downloaded = :downloaded WHERE id = :id")
     suspend fun setDownloaded(id: Long, downloaded: Boolean)
 
+    @Query("UPDATE chapters SET updateSeen = 1 WHERE dateFetch > 0 AND updateSeen = 0")
+    suspend fun markUpdatesSeen()
+
     @Query(
-        "SELECT c.*, m.title AS mangaTitle, m.coverUrl AS mangaCover, m.source AS mangaSource " +
+        "SELECT c.*, m.title AS mangaTitle, COALESCE(m.customCoverUri, m.coverUrl) AS mangaCover, m.source AS mangaSource " +
             "FROM chapters c JOIN manga m ON m.id = c.mangaId " +
-            "WHERE m.favorite = 1 AND c.dateFetch > 0 ORDER BY c.dateFetch DESC, c.sourceOrder ASC LIMIT 300"
+            "WHERE m.favorite = 1 AND c.dateFetch > 0 " +
+            "ORDER BY c.dateFetch DESC, c.sourceOrder ASC LIMIT 300"
     )
     fun observeUpdates(): Flow<List<UpdateItem>>
+
+    @Query(
+        "SELECT COUNT(*) FROM chapters c JOIN manga m ON m.id = c.mangaId " +
+            "WHERE m.favorite = 1 AND c.dateFetch > 0 AND c.updateSeen = 0"
+    )
+    fun observeUpdateCount(): Flow<Int>
 }
 
 @Dao
@@ -133,7 +146,7 @@ interface HistoryDao {
     @Query(
         "SELECT h.lastRead AS lastRead, c.id AS chapterId, c.name AS chapterName, " +
             "c.chapterNumber AS chapterNumber, m.id AS mangaId, m.title AS mangaTitle, " +
-            "m.coverUrl AS mangaCover, m.source AS mangaSource " +
+            "COALESCE(m.customCoverUri, m.coverUrl) AS mangaCover, m.source AS mangaSource " +
             "FROM history h JOIN chapters c ON c.id = h.chapterId JOIN manga m ON m.id = c.mangaId " +
             "WHERE h.id = (SELECT h2.id FROM history h2 JOIN chapters c2 ON c2.id = h2.chapterId " +
             "WHERE c2.mangaId = m.id ORDER BY h2.lastRead DESC, h2.id DESC LIMIT 1) " +
@@ -156,6 +169,9 @@ interface HistoryDao {
 
     @Query("SELECT h.* FROM history h JOIN chapters c ON c.id = h.chapterId WHERE c.mangaId = :mangaId ORDER BY h.lastRead DESC, h.id DESC LIMIT 1")
     suspend fun latestForManga(mangaId: Long): HistoryEntity?
+
+    @Query("SELECT * FROM history WHERE chapterId = :chapterId LIMIT 1")
+    suspend fun forChapter(chapterId: Long): HistoryEntity?
 
     @Query("DELETE FROM history")
     suspend fun clear()

@@ -1,17 +1,31 @@
 package com.imperialreader.ui.details
 
+import android.app.Dialog
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.PopupMenu
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
+import android.view.WindowManager
+import coil.load
 import androidx.lifecycle.Lifecycle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.ConcatAdapter
@@ -20,9 +34,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-import coil.load
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.progressindicator.CircularProgressIndicator
@@ -33,9 +47,15 @@ import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.data.repo.MangaMigrationManager
+import com.imperialreader.data.repo.MangaMigrationOptions
 import com.imperialreader.data.source.CombinedSource
+import com.imperialreader.data.source.SManga
 import com.imperialreader.data.storage.LocalScanner
+import com.imperialreader.ui.common.loadCover
 import com.imperialreader.ui.common.LibraryActions
+import com.imperialreader.ui.browse.GlobalSearchActivity
+import com.imperialreader.ui.reader.GalleryPageSaver
 import com.imperialreader.ui.reader.ReaderActivity
 import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
@@ -43,17 +63,32 @@ import com.imperialreader.util.relativeTime
 import com.imperialreader.util.statusLabel
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
+import java.io.IOException
 
 data class ChapterRow(val chapter: ChapterEntity, val progress: Int?, val selected: Boolean = false)
 
-class MangaDetailsActivity : AppCompatActivity() {
+private data class PendingMigrationConfirmation(
+    val from: MangaEntity,
+    val targetSourceId: String,
+    val target: SManga,
+    val combinedMembers: List<CombinedSource.Member>?
+)
+
+class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private const val EXTRA_ID = "manga_id"
+        private const val REQUEST_SHOW_MIGRATION_ENTRY = 1
         fun intent(ctx: Context, mangaId: Long): Intent =
             Intent(ctx, MangaDetailsActivity::class.java).putExtra(EXTRA_ID, mangaId)
     }
@@ -65,12 +100,42 @@ class MangaDetailsActivity : AppCompatActivity() {
     private val selectedChapterIds = linkedSetOf<Long>()
     private var chapterSelectionMode = false
     private var chapterSelectionAnchorId: Long? = null
+    private var pendingMigrationConfirmation: PendingMigrationConfirmation? = null
+
+    private val chooseCustomCover =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    lifecycleScope.launch {
+                        app.db.mangaDao().setCustomCover(mangaId, uri.toString())
+                        toast("Custom cover saved")
+                    }
+                } catch (e: SecurityException) {
+                    toast("Could not keep access to the selected cover: ${e.message}")
+                }
+            }
+        }
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var swipe: SwipeRefreshLayout
     private lateinit var fab: ExtendedFloatingActionButton
     private lateinit var headerAdapter: HeaderAdapter
     private lateinit var chapterAdapter: ChapterAdapter
+
+    @Deprecated("Use the activity result API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_SHOW_MIGRATION_ENTRY) return
+        val pending = pendingMigrationConfirmation ?: return
+        pendingMigrationConfirmation = null
+        showMigrationConfirmation(
+            pending.from,
+            pending.targetSourceId,
+            pending.target,
+            pending.combinedMembers
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +147,9 @@ class MangaDetailsActivity : AppCompatActivity() {
         }
 
         toolbar = findViewById(R.id.toolbar)
+        toolbar.setTitleTextColor(Color.WHITE)
+        toolbar.setNavigationIconTint(getColor(R.color.gold))
+        toolbar.overflowIcon?.setTint(getColor(R.color.gold))
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.details_menu)
         toolbar.setOnMenuItemClickListener { onMenu(it.itemId); true }
@@ -99,15 +167,25 @@ class MangaDetailsActivity : AppCompatActivity() {
                 if (chapterSelectionMode) toggleChapterSelection(row.chapter.id)
                 else startActivity(ReaderActivity.intent(this, row.chapter.id))
             },
-            onLong = { row, _ ->
-                when {
-                    row.chapter.id in selectedChapterIds -> showChapterSelectionActions()
-                    chapterSelectionMode -> chapterSelectionAnchorId?.let {
-                        selectChapterRange(it, row.chapter.id)
-                    } ?: toggleChapterSelection(row.chapter.id)
-                    else -> toggleChapterSelection(row.chapter.id)
+            onLong = { row, anchor ->
+                val wasInSelectionMode = chapterSelectionMode
+                if (wasInSelectionMode) {
+                    if (row.chapter.id in selectedChapterIds) {
+                        showChapterMenu(row, anchor)
+                    } else {
+                        chapterSelectionAnchorId?.let { selectChapterRange(it, row.chapter.id) }
+                            ?: toggleChapterSelection(row.chapter.id)
+                    }
+                } else {
+                    chapterSelectionMode = true
+                    selectedChapterIds.clear()
+                    selectedChapterIds.add(row.chapter.id)
+                    chapterSelectionAnchorId = row.chapter.id
+                    renderChapterSelection()
                 }
+                if (!wasInSelectionMode && row.chapter.read) showChapterMenu(row, anchor)
             },
+            onOptions = { row, anchor -> showChapterMenu(row, anchor) },
             onDownload = { row -> onDownloadClick(row) }
         )
         recycler.layoutManager = LinearLayoutManager(this)
@@ -125,6 +203,8 @@ class MangaDetailsActivity : AppCompatActivity() {
                     app.db.mangaDao().observe(mangaId).filterNotNull().collect { m ->
                         manga = m
                         headerAdapter.update(m, rows.size)
+                        toolbar.menu.findItem(R.id.action_reset_custom_cover)?.isVisible =
+                            m.customCoverUri != null && !chapterSelectionMode
                         updateChapterSelectionMenu()
                     }
                 }
@@ -156,7 +236,7 @@ class MangaDetailsActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val m = app.db.mangaDao().getById(mangaId)
-            if (m != null && !m.initialized) refresh()
+            if (m != null && !m.initialized && !m.favorite) refresh(m)
         }
     }
 
@@ -188,8 +268,8 @@ class MangaDetailsActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------ actions
 
-    private fun refresh() {
-        val m = manga ?: return
+    private fun refresh(target: MangaEntity? = manga) {
+        val m = target ?: return
         lifecycleScope.launch {
             swipe.isRefreshing = true
             try {
@@ -262,8 +342,14 @@ class MangaDetailsActivity : AppCompatActivity() {
 
     private fun onMenu(id: Int) {
         when (id) {
+            R.id.action_custom_cover -> chooseCustomCover.launch(arrayOf("image/*"))
+            R.id.action_reset_custom_cover -> lifecycleScope.launch {
+                app.db.mangaDao().setCustomCover(mangaId, null)
+                toast("Custom cover reset")
+            }
             R.id.action_sort -> reversed.value = !reversed.value
             R.id.action_refresh -> refresh()
+            R.id.action_migrate -> showMigrationSources()
             R.id.action_download -> showDownloadDialog()
             R.id.action_mark_all_read -> markAll(true)
             R.id.action_mark_all_unread -> markAll(false)
@@ -275,7 +361,219 @@ class MangaDetailsActivity : AppCompatActivity() {
             R.id.action_select_all_chapters -> selectAllChapters()
             R.id.action_mark_selected_read -> markSelectedChapters(true)
             R.id.action_mark_selected_unread -> markSelectedChapters(false)
+            R.id.action_delete_selected_downloads -> deleteSelectedDownloads()
             R.id.action_cancel_chapter_selection -> clearChapterSelection()
+        }
+    }
+
+    private fun showMigrationSources() {
+        val current = manga ?: return
+        if (current.source == LOCAL_SOURCE_ID ||
+            (current.source != CombinedSource.ID && app.sources.get(current.source) == null)
+        ) {
+            toast("This entry cannot be migrated to a manga source")
+            return
+        }
+
+        startActivity(MigrationSourceSelectionActivity.intent(this, current.id))
+    }
+
+    private fun showMigrationProgress(): androidx.appcompat.app.AlertDialog {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val padding = (24 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(ProgressBar(this@MangaDetailsActivity))
+            addView(TextView(this@MangaDetailsActivity).apply {
+                text = "Searching sources…"
+                setPadding(padding, 0, 0, 0)
+            })
+        }
+        return MaterialAlertDialogBuilder(this)
+            .setView(content)
+            .setCancelable(false)
+            .create()
+            .also { it.show() }
+    }
+
+    private fun showMigrationConfirmation(
+        from: MangaEntity,
+        targetSourceId: String,
+        target: SManga,
+        combinedMembers: List<CombinedSource.Member>?
+    ) {
+        val savedFlags = app.prefs.migrationFlags
+        val chapters = MaterialCheckBox(this).apply {
+            text = "Chapters and reading progress"
+            isChecked = "chapters" in savedFlags
+        }
+        val category = MaterialCheckBox(this).apply {
+            text = "Category"
+            isChecked = "category" in savedFlags
+        }
+        val history = MaterialCheckBox(this).apply {
+            text = "History"
+            isChecked = "history" in savedFlags
+        }
+        val readerSettings = MaterialCheckBox(this).apply {
+            text = "Reader settings"
+            isChecked = "reader_settings" in savedFlags
+        }
+        val showEntry = MaterialButton(this).apply {
+            text = "Show entry"
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = (20 * resources.displayMetrics.density).toInt()
+            setPadding(padding, 0, padding, 0)
+            addView(chapters)
+            addView(category)
+            addView(history)
+            addView(readerSettings)
+            addView(LinearLayout(this@MangaDetailsActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.END
+                addView(showEntry)
+            })
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("What to include?")
+            .setMessage("${from.title} → ${target.title}")
+            .setView(content)
+            .setNeutralButton("Copy", null)
+            .setPositiveButton("Migrate", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener {
+            showEntry.setOnClickListener {
+                app.prefs.migrationFlags = buildSet {
+                    if (chapters.isChecked) add("chapters")
+                    if (category.isChecked) add("category")
+                    if (history.isChecked) add("history")
+                    if (readerSettings.isChecked) add("reader_settings")
+                }
+                dialog.dismiss()
+                showMigrationEntry(from, targetSourceId, target, combinedMembers)
+            }
+            fun start(replaceOriginal: Boolean) {
+                dialog.dismiss()
+                app.prefs.migrationFlags = buildSet {
+                    if (chapters.isChecked) add("chapters")
+                    if (category.isChecked) add("category")
+                    if (history.isChecked) add("history")
+                    if (readerSettings.isChecked) add("reader_settings")
+                }
+                performMigration(
+                    from = from,
+                    targetSourceId = targetSourceId,
+                    target = target,
+                    combinedMembers = combinedMembers,
+                    options = MangaMigrationOptions(
+                        chapters = chapters.isChecked,
+                        category = category.isChecked,
+                        history = history.isChecked,
+                        readerSettings = readerSettings.isChecked
+                    ),
+                    replaceOriginal = replaceOriginal
+                )
+            }
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL)
+                .setOnClickListener { start(replaceOriginal = false) }
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener { start(replaceOriginal = true) }
+        }
+        dialog.show()
+    }
+
+    private fun showMigrationEntry(
+        from: MangaEntity,
+        targetSourceId: String,
+        target: SManga,
+        combinedMembers: List<CombinedSource.Member>?
+    ) {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val padding = (24 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, padding)
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(ProgressBar(this@MangaDetailsActivity))
+            addView(TextView(this@MangaDetailsActivity).apply {
+                text = "Loading entry…"
+                setPadding(padding, 0, 0, 0)
+            })
+        }
+        val progress = MaterialAlertDialogBuilder(this)
+            .setView(content)
+            .setCancelable(false)
+            .create()
+        progress.show()
+        lifecycleScope.launch {
+            var entry: MangaEntity? = null
+            try {
+                val resolvedEntry = if (combinedMembers != null) {
+                    app.repo.getOrCreateCombined(target.title, combinedMembers, target.thumbnailUrl)
+                } else {
+                    app.repo.getOrCreate(targetSourceId, target)
+                }
+                entry = resolvedEntry
+                app.repo.refresh(resolvedEntry)
+            } catch (e: CancellationException) {
+                progress.dismiss()
+                throw e
+            } catch (e: Exception) {
+                toast("Could not refresh entry: ${e.message}")
+            } finally {
+                progress.dismiss()
+            }
+            entry?.let {
+                pendingMigrationConfirmation = PendingMigrationConfirmation(
+                    from,
+                    targetSourceId,
+                    target,
+                    combinedMembers
+                )
+                startActivityForResult(intent(this@MangaDetailsActivity, it.id), REQUEST_SHOW_MIGRATION_ENTRY)
+            }
+        }
+    }
+
+    private fun performMigration(
+        from: MangaEntity,
+        targetSourceId: String,
+        target: SManga,
+        combinedMembers: List<CombinedSource.Member>?,
+        options: MangaMigrationOptions,
+        replaceOriginal: Boolean
+    ) {
+        val progress = showMigrationProgress()
+        lifecycleScope.launch {
+            try {
+                val result = MangaMigrationManager(app.repo).migrate(
+                    from = from,
+                    target = target,
+                    targetSourceId = targetSourceId,
+                    combinedMembers = combinedMembers,
+                    options = options,
+                    replaceOriginal = replaceOriginal
+                )
+                progress.dismiss()
+                toast(
+                    "${if (replaceOriginal) "Migrated" else "Copied"} to ${result.manga.title}; " +
+                        "copied progress for ${result.copiedChapters} chapters" +
+                        if (result.unmatchedChapters > 0) {
+                            " (${result.unmatchedChapters} progress items had no chapter match)"
+                        } else ""
+                )
+                startActivity(intent(this@MangaDetailsActivity, result.manga.id))
+                finish()
+            } catch (e: CancellationException) {
+                progress.dismiss()
+                throw e
+            } catch (e: Exception) {
+                progress.dismiss()
+                toast("Migration failed: ${e.message}")
+            }
         }
     }
 
@@ -290,15 +588,22 @@ class MangaDetailsActivity : AppCompatActivity() {
         menu.findItem(R.id.action_download)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_sort)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_refresh)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_migrate)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_mark_all_read)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_mark_all_unread)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_delete_downloads)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_custom_cover)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_reset_custom_cover)?.isVisible =
+            !chapterSelectionMode && manga?.customCoverUri != null
+        menu.findItem(R.id.action_download)?.isVisible = true
         menu.findItem(R.id.action_select_chapters)?.isVisible = !chapterSelectionMode
         menu.findItem(R.id.action_select_all_chapters)?.isVisible = chapterSelectionMode
         menu.findItem(R.id.action_mark_selected_read)?.isVisible =
             chapterSelectionMode && selectedChapterIds.isNotEmpty()
         menu.findItem(R.id.action_mark_selected_unread)?.isVisible =
             chapterSelectionMode && selectedChapterIds.isNotEmpty()
+        menu.findItem(R.id.action_delete_selected_downloads)?.isVisible =
+            chapterSelectionMode && rows.any { it.chapter.id in selectedChapterIds && it.chapter.downloaded }
         menu.findItem(R.id.action_cancel_chapter_selection)?.isVisible = chapterSelectionMode
     }
 
@@ -345,26 +650,6 @@ class MangaDetailsActivity : AppCompatActivity() {
         renderChapterSelection()
     }
 
-    private fun showChapterSelectionActions() {
-        MaterialAlertDialogBuilder(this)
-            .setItems(arrayOf("Mark as read", "Mark as unread", "Select all", "Cancel selection")) { _, which ->
-                when (which) {
-                    0 -> markSelectedChapters(true)
-                    1 -> markSelectedChapters(false)
-                    2 -> {
-                        selectedChapterIds.addAll(rows.map { it.chapter.id })
-                        chapterSelectionMode = selectedChapterIds.isNotEmpty()
-                        if (chapterSelectionAnchorId == null) {
-                            chapterSelectionAnchorId = selectedChapterIds.firstOrNull()
-                        }
-                        renderChapterSelection()
-                    }
-                    3 -> clearChapterSelection()
-                }
-            }
-            .show()
-    }
-
     private fun clearChapterSelection() {
         chapterSelectionMode = false
         selectedChapterIds.clear()
@@ -399,25 +684,46 @@ class MangaDetailsActivity : AppCompatActivity() {
             toast("Local entries are already on your device")
             return
         }
-        val options = arrayOf("Next unread chapter", "Next 5 unread", "Next 10 unread", "All unread", "All chapters")
+        val ordered = readingOrder()
+        val unread = ordered.filter { !it.read }
+        val options = buildList {
+            add("Next unread chapter" to unread.take(1))
+            add("Next 5 unread" to unread.take(5))
+            add("Next 10 unread" to unread.take(10))
+            add("All unread" to unread)
+            if (selectedChapterIds.isNotEmpty()) {
+                val selected = rows.map { it.chapter }.filter { it.id in selectedChapterIds }
+                add("Selected chapters" to selected)
+            }
+            add("All chapters" to ordered)
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle("Download")
-            .setItems(options) { _, which ->
-                val ordered = readingOrder()
-                val unread = ordered.filter { !it.read }
-                val chosen = when (which) {
-                    0 -> unread.take(1)
-                    1 -> unread.take(5)
-                    2 -> unread.take(10)
-                    3 -> unread
-                    else -> ordered
-                }.filter { !it.downloaded }
-                if (chosen.isEmpty()) toast("Nothing to download") else {
-                    app.downloads.enqueue(m, chosen)
-                    toast("Queued ${chosen.size} chapter(s)")
-                }
+            .setItems(options.map { it.first }.toTypedArray()) { _, which ->
+                enqueueChapters(m, options[which].second)
             }
             .show()
+    }
+
+    private fun downloadSelectedChapters() {
+        val m = manga ?: return
+        if (m.source == LOCAL_SOURCE_ID) {
+            toast("Local entries are already on your device")
+            return
+        }
+        val selected = rows.map { it.chapter }.filter { it.id in selectedChapterIds }
+        enqueueChapters(m, selected)
+        clearChapterSelection()
+    }
+
+    private fun enqueueChapters(manga: MangaEntity, chapters: List<ChapterEntity>) {
+        val chosen = chapters.filterNot { it.downloaded }
+        if (chosen.isEmpty()) {
+            toast("Nothing to download")
+            return
+        }
+        app.downloads.enqueue(manga, chosen)
+        toast("Queued ${chosen.size} chapter(s)")
     }
 
     private fun deleteAllDownloads() {
@@ -431,6 +737,32 @@ class MangaDetailsActivity : AppCompatActivity() {
             .setTitle("Delete ${downloaded.size} downloaded chapter(s)?")
             .setPositiveButton("Delete") { _, _ ->
                 lifecycleScope.launch { downloaded.forEach { app.downloads.deleteDownload(m, it) } }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun deleteSelectedDownloads() {
+        val m = manga ?: return
+        val downloaded = rows.map { it.chapter }
+            .filter { it.id in selectedChapterIds && it.downloaded }
+        if (downloaded.isEmpty()) {
+            toast("No selected downloads")
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Delete ${downloaded.size} selected download(s)?")
+            .setPositiveButton("Delete") { _, _ ->
+                lifecycleScope.launch {
+                    try {
+                        downloaded.forEach { app.downloads.deleteDownload(m, it) }
+                        clearChapterSelection()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast("Could not delete selected downloads: ${e.message}")
+                    }
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -460,24 +792,36 @@ class MangaDetailsActivity : AppCompatActivity() {
         val c = row.chapter
         val dao = app.db.chapterDao()
         val popup = PopupMenu(this, anchor)
-        popup.menu.add(0, 0, 0, "Select for bulk actions")
-        popup.menu.add(0, 1, 1, if (c.read) "Mark as unread" else "Mark as read")
-        popup.menu.add(0, 2, 2, "Mark previous as read")
-        popup.menu.add(0, 3, 3, if (c.bookmark) "Remove bookmark" else "Bookmark")
+        popup.menu.add(0, 1, 1, "Mark as read")
+        popup.menu.add(0, 4, 2, "Mark as unread")
+        popup.menu.add(0, 5, 3, "Select all chapters")
+        popup.menu.add(0, 6, 4, "Cancel selection")
+        popup.menu.add(0, 7, 5, "Download selected chapters")
+        popup.menu.add(0, 3, 7, if (c.bookmark) "Remove bookmark" else "Bookmark")
+        popup.menu.findItem(6).isVisible = chapterSelectionMode
+        popup.menu.findItem(7).isVisible = chapterSelectionMode
         popup.setOnMenuItemClickListener { item ->
-            if (item.itemId == 0) {
+            if (item.itemId == 5) {
                 chapterSelectionMode = true
-                selectedChapterIds.add(c.id)
-                if (chapterSelectionAnchorId == null) chapterSelectionAnchorId = c.id
-                renderChapterSelection()
+                selectedChapterIds.clear()
+                selectAllChapters()
+                return@setOnMenuItemClickListener true
+            }
+            if (item.itemId == 6) {
+                clearChapterSelection()
+                return@setOnMenuItemClickListener true
+            }
+            if (item.itemId == 7) {
+                downloadSelectedChapters()
                 return@setOnMenuItemClickListener true
             }
             lifecycleScope.launch {
                 when (item.itemId) {
-                    1 -> dao.setRead(listOf(c.id), !c.read)
-                    2 -> dao.setRead(rows.map { it.chapter }.filter { it.sourceOrder > c.sourceOrder }.map { it.id }, true)
+                    1 -> dao.setRead(if (chapterSelectionMode) selectedChapterIds.toList() else listOf(c.id), true)
+                    4 -> dao.setRead(if (chapterSelectionMode) selectedChapterIds.toList() else listOf(c.id), false)
                     3 -> dao.setBookmark(c.id, !c.bookmark)
                 }
+                if (chapterSelectionMode && item.itemId in setOf(1, 4)) clearChapterSelection()
             }
             true
         }
@@ -503,6 +847,8 @@ class MangaDetailsActivity : AppCompatActivity() {
 
         inner class VH(v: View) : RecyclerView.ViewHolder(v) {
             val cover: ImageView = v.findViewById(R.id.hCover)
+            var boundCoverUrl: String? = null
+            var hasBoundCover = false
             val title: TextView = v.findViewById(R.id.hTitle)
             val author: TextView = v.findViewById(R.id.hAuthor)
             val status: TextView = v.findViewById(R.id.hStatus)
@@ -521,8 +867,25 @@ class MangaDetailsActivity : AppCompatActivity() {
         override fun onBindViewHolder(h: VH, position: Int) {
             val manga = m ?: return
             val source = app.sources.get(manga.source)
-            h.cover.load(manga.coverUrl) { source?.imageHeaders()?.forEach { (k, v) -> addHeader(k, v) } }
+            val coverUrl = manga.displayCoverUrl
+            if (!h.hasBoundCover || h.boundCoverUrl != coverUrl) {
+                h.cover.loadCover(coverUrl, source?.imageHeaders().orEmpty())
+                h.boundCoverUrl = coverUrl
+                h.hasBoundCover = true
+            }
+            h.cover.setOnClickListener {
+                manga.displayCoverUrl?.let { url -> showCoverViewer(url, source?.imageHeaders().orEmpty()) }
+            }
             h.title.text = manga.title
+            h.title.setOnClickListener {
+                h.title.context.startActivity(GlobalSearchActivity.intent(h.title.context, manga.title))
+            }
+            h.title.setOnLongClickListener {
+                h.title.context.getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("Title", manga.title))
+                h.title.context.toast("Title copied")
+                true
+            }
             val people = listOfNotNull(manga.author, manga.artist?.takeIf { it != manga.author }).joinToString(" • ")
             h.author.text = people.ifBlank { "Unknown author" }
             val sourceLabel = when {
@@ -544,12 +907,88 @@ class MangaDetailsActivity : AppCompatActivity() {
             h.genres.text = manga.genre.orEmpty()
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
             h.chapters.text = "$count chapters"
+            h.title.setTextColor(getColor(R.color.on_surface))
+            h.author.setTextColor(getColor(R.color.on_surface_variant))
+            h.status.setTextColor(getColor(R.color.on_surface_variant))
+            h.desc.setTextColor(getColor(R.color.on_surface))
+            h.genres.setTextColor(getColor(R.color.gold_light))
+            h.chapters.setTextColor(getColor(R.color.on_surface))
+            h.btnLibrary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
+            h.btnWeb.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
         }
+    }
+
+    private fun showCoverViewer(url: String, headers: Map<String, String>) {
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            load(url) {
+                headers.forEach { (name, value) -> addHeader(name, value) }
+            }
+        }
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(
+                image,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        val save = ImageButton(this).apply {
+            contentDescription = "Save cover image"
+            setImageResource(R.drawable.ic_download)
+            setColorFilter(getColor(R.color.gold))
+            val density = resources.displayMetrics.density
+            val inset = (20 * density).toInt()
+            setPadding(inset / 2, inset / 2, inset / 2, inset / 2)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xDD202020.toInt())
+                setStroke((2 * density).toInt(), getColor(R.color.gold))
+            }
+            setOnClickListener {
+                isEnabled = false
+                lifecycleScope.launch {
+                    var bitmap: android.graphics.Bitmap? = null
+                    try {
+                        bitmap = GalleryPageSaver.copyDisplayedPage(image)
+                            ?: throw IOException("The cover has not finished loading")
+                        GalleryPageSaver.save(this@MangaDetailsActivity, bitmap)
+                        toast("Cover saved to Pictures/ImperialReader")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast("Could not save the cover: ${e.message}")
+                    } finally {
+                        bitmap?.recycle()
+                        isEnabled = true
+                    }
+                }
+            }
+        }
+        val buttonSize = (52 * resources.displayMetrics.density).toInt()
+        val buttonMargin = (20 * resources.displayMetrics.density).toInt()
+        root.addView(
+            save,
+            FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(0, 0, buttonMargin, buttonMargin)
+            }
+        )
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
     }
 
     private inner class ChapterAdapter(
         val onClick: (ChapterRow) -> Unit,
         val onLong: (ChapterRow, View) -> Unit,
+        val onOptions: (ChapterRow, View) -> Unit,
         val onDownload: (ChapterRow) -> Unit
     ) : ListAdapter<ChapterRow, ChapterAdapter.VH>(Diff) {
 
@@ -560,6 +999,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             val frame: FrameLayout = v.findViewById(R.id.chDlFrame)
             val icon: ImageView = v.findViewById(R.id.chDlIcon)
             val progress: CircularProgressIndicator = v.findViewById(R.id.chDlProgress)
+            val options: TextView = v.findViewById(R.id.chOptions)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
@@ -570,6 +1010,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             val c = row.chapter
             h.title.text = (if (c.bookmark) "★ " else "") + c.name
             h.title.alpha = if (c.read) 0.5f else 1f
+            h.title.setTextColor(Color.WHITE)
             h.selectionMark.visibility = if (row.selected) View.VISIBLE else View.GONE
             h.sub.text = listOfNotNull(
                 relativeTime(c.dateUpload).takeIf { it.isNotBlank() },
@@ -577,6 +1018,10 @@ class MangaDetailsActivity : AppCompatActivity() {
                 if (!c.read && c.lastPageRead > 0) "Page ${c.lastPageRead + 1}" else null
             ).joinToString(" • ")
             h.sub.alpha = if (c.read) 0.5f else 1f
+            h.sub.setTextColor(getColor(R.color.on_surface_variant))
+            h.options.setTextColor(getColor(R.color.on_surface_variant))
+            h.icon.setColorFilter(getColor(R.color.gold))
+            h.progress.setIndicatorColor(getColor(R.color.gold))
 
             if (row.progress != null) {
                 h.progress.visibility = View.VISIBLE
@@ -590,6 +1035,7 @@ class MangaDetailsActivity : AppCompatActivity() {
                 h.icon.alpha = if (c.downloaded) 1f else 0.6f
             }
             h.frame.setOnClickListener { onDownload(row) }
+            h.options.setOnClickListener { onOptions(row, h.itemView) }
             h.itemView.setOnClickListener { onClick(row) }
             h.itemView.setOnLongClickListener { onLong(row, h.itemView); true }
         }

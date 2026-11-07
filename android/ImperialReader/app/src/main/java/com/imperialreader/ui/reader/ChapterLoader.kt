@@ -11,6 +11,7 @@ import com.imperialreader.data.book.NovelChapterEpub
 import com.imperialreader.data.source.SChapter
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.storage.Archives
+import com.imperialreader.data.storage.LocalArtworkPreview
 import com.imperialreader.util.NaturalOrder
 import com.imperialreader.util.app
 import com.imperialreader.util.isImageName
@@ -21,7 +22,11 @@ import java.io.IOException
 
 sealed class LoadedChapter {
     /** Page list: each entry is an http(s) URL, a content:// URI or a file:// URI. */
-    data class Images(val pages: List<String>, val headers: Map<String, String>) : LoadedChapter()
+    data class Images(
+        val pages: List<String>,
+        val headers: Map<String, String>,
+        val audioUrl: String? = null
+    ) : LoadedChapter()
     data class Epub(val uri: String) : LoadedChapter()
     data class Pdf(val uri: String) : LoadedChapter()
 }
@@ -41,7 +46,14 @@ object ChapterLoader {
             if (chapter.downloaded) {
                 val files = ctx.app.storage.downloadedPages(manga, chapter)
                 if (files.isNotEmpty()) {
-                    return@withContext LoadedChapter.Images(files.map { it.uri.toString() }, emptyMap())
+                    val pages = files.map { file ->
+                        if (LocalArtworkPreview.supports(file.name)) {
+                            LocalArtworkPreview.readerPage(ctx, file)
+                        } else {
+                            file.uri.toString()
+                        }
+                    }
+                    return@withContext LoadedChapter.Images(pages, emptyMap())
                 }
             }
             val source = ctx.app.sources.get(manga.source)
@@ -51,7 +63,15 @@ object ChapterLoader {
                 SChapter(url = chapter.url, name = chapter.name)
             )
             if (loaded.urls.isEmpty()) throw IOException("The source returned no pages for this chapter")
-            LoadedChapter.Images(loaded.urls, loaded.headers)
+            val pages = loaded.urls.map { url ->
+                val extension = Uri.parse(url).lastPathSegment.orEmpty().substringAfterLast('.', "")
+                if (url.startsWith("http", ignoreCase = true) && LocalArtworkPreview.supports(extension)) {
+                    LocalArtworkPreview.readerPage(ctx, url, loaded.headers)
+                } else {
+                    url
+                }
+            }
+            LoadedChapter.Images(pages, loaded.headers, loaded.audioUrl)
         }
 
     private fun loadLocal(ctx: Context, manga: MangaEntity, chapter: ChapterEntity): LoadedChapter {
@@ -60,13 +80,26 @@ object ChapterLoader {
         val name = doc.name.orEmpty().lowercase()
         return when {
             doc.isDirectory -> {
-                val files = doc.listFiles().filter { !it.isDirectory && isImageName(it.name) }
+                val files = doc.listFiles().filter {
+                    !it.isDirectory && (isImageName(it.name) || LocalArtworkPreview.supports(it.name))
+                }
                     .sortedWith(compareBy(NaturalOrder) { it.name ?: "" })
                 if (files.isEmpty()) throw IOException("No images in this folder")
-                LoadedChapter.Images(files.map { it.uri.toString() }, emptyMap())
+                LoadedChapter.Images(
+                    files.map { file ->
+                        if (LocalArtworkPreview.supports(file.name)) {
+                            LocalArtworkPreview.readerPage(ctx, file)
+                        } else {
+                            file.uri.toString()
+                        }
+                    },
+                    emptyMap()
+                )
             }
             name.endsWith(".epub") -> LoadedChapter.Epub(doc.uri.toString())
             name.endsWith(".pdf") -> LoadedChapter.Pdf(doc.uri.toString())
+            LocalArtworkPreview.supports(name) ->
+                LoadedChapter.Images(listOf(LocalArtworkPreview.readerPage(ctx, doc)), emptyMap())
             else -> {
                 val pages = extractArchive(ctx, doc)
                 if (pages.isEmpty()) throw IOException("No images found inside the archive")

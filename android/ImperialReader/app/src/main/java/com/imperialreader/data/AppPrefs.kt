@@ -10,6 +10,12 @@ class AppPrefs(context: Context) {
     val sp: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
     init {
+        sp.edit()
+            .remove("app_theme")
+            .remove("pixel_style")
+            .remove("ui_accent")
+            .remove("profile_picture_uri")
+            .apply()
         val migratedInterval = when (sp.getString("automatic_cover_refresh_interval", null)) {
             "6" -> "360"
             "12" -> "720"
@@ -28,7 +34,7 @@ class AppPrefs(context: Context) {
         const val READER_VERTICAL = 2
         const val FILTER_NONE = 0
         const val FILTER_INCLUDE = 1
-        const val FILTER_EXCLUDE = -1
+        const val FILTER_EXCLUDE = 2
     }
 
     /** 0 = left-to-right, 1 = right-to-left, 2 = vertical/webtoon (stored as string by ListPreference). */
@@ -45,10 +51,40 @@ class AppPrefs(context: Context) {
         sp.edit { putString("reader_mode_$mangaId", mode.toString()) }
     }
 
+    var downloadConcurrency: Int
+        get() = sp.getString("download_concurrency", "1")?.toIntOrNull()
+            ?.takeIf { it in 1..5 } ?: 1
+        set(value) {
+            require(value in 1..5) { "Download concurrency must be between 1 and 5" }
+            sp.edit { putString("download_concurrency", value.toString()) }
+        }
+
+    var globalSearchConcurrency: Int
+        get() = sp.getString("global_search_concurrency", "5")?.toIntOrNull()
+            ?.takeIf { it in 1..5 } ?: 5
+        set(value) {
+            require(value in 1..5) { "Global Search concurrency must be between 1 and 5" }
+            sp.edit { putString("global_search_concurrency", value.toString()) }
+        }
+
+    val globalSearchRequestTimeoutMs: Long
+        get() = sp.getString("global_search_request_timeout", "12000")?.toLongOrNull()
+            ?.takeIf { it in setOf(8_000L, 12_000L, 20_000L) } ?: 12_000L
+
+    val globalSearchSourceDeadlineMs: Long
+        get() = sp.getString("global_search_source_deadline", "90000")?.toLongOrNull()
+            ?.takeIf { it in setOf(45_000L, 90_000L, 120_000L) } ?: 90_000L
+
+    val globalSearchOverallDeadlineMs: Long
+        get() = sp.getString("global_search_overall_deadline", "300000")?.toLongOrNull()
+            ?.takeIf { it in setOf(120_000L, 300_000L, 600_000L) } ?: 300_000L
+
     val keepScreenOn: Boolean get() = sp.getBoolean("keep_screen_on", true)
     val fullscreen: Boolean get() = sp.getBoolean("fullscreen", true)
     val tapNavigation: Boolean get() = sp.getBoolean("tap_navigation", true)
     val volumeKeys: Boolean get() = sp.getBoolean("volume_keys", false)
+    val skipDuplicateChaptersAndGaidens: Boolean
+        get() = sp.getBoolean("skip_duplicate_chapters_and_gaidens", false)
     val showNsfwExtensions: Boolean get() = sp.getBoolean("show_nsfw_ext", false)
 
     val libraryColumns: Int get() = sp.getString("library_columns", "3")?.toIntOrNull() ?: 3
@@ -68,6 +104,29 @@ class AppPrefs(context: Context) {
     var searchOnlyResults: Boolean
         get() = sp.getBoolean("search_only_results", false)
         set(v) = sp.edit { putBoolean("search_only_results", v) }
+
+    var globalSearchExtensions: Boolean
+        get() = sp.getBoolean("global_search_extensions", false)
+        set(v) = sp.edit { putBoolean("global_search_extensions", v) }
+
+    var globalSearchSourceIds: Set<String>
+        get() = sp.getStringSet("global_search_source_ids", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet("global_search_source_ids", v.toSet()) }
+
+    var migrationSourceIds: Set<String>
+        get() = sp.getStringSet("migration_source_ids", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet("migration_source_ids", v.toSet()) }
+
+    var migrationFlags: Set<String>
+        get() = sp.getStringSet(
+            "migration_flags",
+            setOf("chapters", "category", "history", "reader_settings")
+        )?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet("migration_flags", v.toSet()) }
+
+    var globalSearchExtensionIds: Set<String>
+        get() = sp.getStringSet("global_search_extension_ids", emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet("global_search_extension_ids", v.toSet()) }
 
     var storageUri: String?
         get() = sp.getString("storage_uri", null)
@@ -89,21 +148,21 @@ class AppPrefs(context: Context) {
         get() = sp.getLong("library_category", -1L)
         set(v) = sp.edit { putLong("library_category", v) }
     var filterUnread: Boolean
-        get() = filterUnreadMode == FILTER_INCLUDE
-        set(v) { filterUnreadMode = if (v) FILTER_INCLUDE else FILTER_NONE }
-    var filterUnreadMode: Int
-        get() = sp.getInt("filter_unread_mode", if (sp.getBoolean("filter_unread", false)) FILTER_INCLUDE else FILTER_NONE)
-        set(v) = sp.edit { putInt("filter_unread_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
+        get() = sp.getBoolean("filter_unread", false)
+        set(v) = sp.edit { putBoolean("filter_unread", v) }
     var filterBookmarked: Boolean
-        get() = filterBookmarkedMode == FILTER_INCLUDE
-        set(v) { filterBookmarkedMode = if (v) FILTER_INCLUDE else FILTER_NONE }
-    var filterBookmarkedMode: Int
-        get() = sp.getInt("filter_bookmarked_mode", if (sp.getBoolean("filter_bookmarked", false)) FILTER_INCLUDE else FILTER_NONE)
-        set(v) = sp.edit { putInt("filter_bookmarked_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
+        get() = sp.getBoolean("filter_bookmarked", false)
+        set(v) = sp.edit { putBoolean("filter_bookmarked", v) }
 
     val showUnreadBadge: Boolean get() = sp.getBoolean("badge_unread", true)
     val showDownloadBadge: Boolean get() = sp.getBoolean("badge_download", true)
     val refreshOnStart: Boolean get() = sp.getBoolean("refresh_on_start", false)
+    val libraryUpdateIntervalMinutes: Long
+        get() = sp.getString("library_update_frequency", "0")?.toLongOrNull()
+            ?.takeIf { it in setOf(0L, 30L, 60L, 720L, 1440L, 10080L) } ?: 0L
+    var libraryUpdatedAt: Long
+        get() = sp.getLong("library_updated_at", 0L)
+        set(value) = sp.edit { putLong("library_updated_at", value) }
     val automaticCoverRefresh: Boolean get() = sp.getBoolean("automatic_cover_refresh", false)
     val automaticCoverRefreshIntervalMinutes: Long
         get() = sp.getString("automatic_cover_refresh_interval", "1440")?.toLongOrNull()
@@ -111,6 +170,14 @@ class AppPrefs(context: Context) {
     var automaticCoverRefreshAt: Long
         get() = sp.getLong("automatic_cover_refresh_at", 0L)
         set(value) = sp.edit { putLong("automatic_cover_refresh_at", value) }
+
+    val automaticAppUpdates: Boolean get() = sp.getBoolean("automatic_app_updates", false)
+    val automaticAppUpdateIntervalMinutes: Long
+        get() = sp.getString("automatic_app_update_frequency", "0")?.toLongOrNull()
+            ?.takeIf { it in setOf(0L, 30L, 60L, 360L, 720L, 1440L, 10080L) } ?: 0L
+    var automaticAppUpdateLastAssetId: String?
+        get() = sp.getString("automatic_app_update_last_asset_id", null)
+        set(value) = sp.edit { putString("automatic_app_update_last_asset_id", value) }
 
     var appLockEnabled: Boolean
         get() = sp.getBoolean("app_lock_enabled", false)
@@ -128,11 +195,28 @@ class AppPrefs(context: Context) {
     val localCovers: Boolean get() = sp.getBoolean("local_covers", true)
 
     var filterDownloaded: Boolean
-        get() = filterDownloadedMode == FILTER_INCLUDE
-        set(v) { filterDownloadedMode = if (v) FILTER_INCLUDE else FILTER_NONE }
-    var filterDownloadedMode: Int
-        get() = sp.getInt("filter_downloaded_mode", if (sp.getBoolean("filter_downloaded", false)) FILTER_INCLUDE else FILTER_NONE)
-        set(v) = sp.edit { putInt("filter_downloaded_mode", v.coerceIn(FILTER_EXCLUDE, FILTER_INCLUDE)) }
+        get() = sp.getBoolean("filter_downloaded", false)
+        set(v) = sp.edit { putBoolean("filter_downloaded", v) }
+
+    private fun libraryFilterMode(key: String, legacyKey: String): Int =
+        sp.getInt(key, if (sp.getBoolean(legacyKey, false)) FILTER_INCLUDE else FILTER_NONE)
+            .coerceIn(FILTER_NONE, FILTER_EXCLUDE)
+
+    private fun setLibraryFilterMode(key: String, value: Int) {
+        sp.edit { putInt(key, value.coerceIn(FILTER_NONE, FILTER_EXCLUDE)) }
+    }
+
+    var unreadFilterMode: Int
+        get() = libraryFilterMode("library_filter_unread_mode", "filter_unread")
+        set(value) = setLibraryFilterMode("library_filter_unread_mode", value)
+
+    var downloadedFilterMode: Int
+        get() = libraryFilterMode("library_filter_downloaded_mode", "filter_downloaded")
+        set(value) = setLibraryFilterMode("library_filter_downloaded_mode", value)
+
+    var bookmarkedFilterMode: Int
+        get() = libraryFilterMode("library_filter_bookmarked_mode", "filter_bookmarked")
+        set(value) = setLibraryFilterMode("library_filter_bookmarked_mode", value)
 
     // ---- sources ----
     var disabledSources: Set<String>

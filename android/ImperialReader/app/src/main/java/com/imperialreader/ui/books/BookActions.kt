@@ -7,6 +7,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.imperialreader.data.book.BookItem
 import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
+import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.network.await
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.source.SManga
@@ -14,6 +15,7 @@ import com.imperialreader.ui.details.MangaDetailsActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.sanitize
 import com.imperialreader.util.toast
+import com.imperialreader.ui.common.LibraryActions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,6 +27,19 @@ import java.io.IOException
 object BookActions {
 
     fun show(activity: AppCompatActivity, item: BookItem) {
+        activity.lifecycleScope.launch {
+            val detailed = try {
+                BookSources.get(item.sourceId)?.details(item) ?: item
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                item
+            }
+            showDetails(activity, detailed)
+        }
+    }
+
+    private fun showDetails(activity: AppCompatActivity, item: BookItem) {
         val details = buildString {
             append(item.author ?: "Unknown author")
             item.artist?.takeIf { it.isNotBlank() }?.let { append("\nArtist: ").append(it) }
@@ -40,7 +55,8 @@ object BookActions {
                 if (source?.isWebNovel == true) {
                     setPositiveButton("Add to library") { _, _ -> addNovelToLibrary(activity, item) }
                 } else {
-                    setPositiveButton("Download & add to library") { _, _ -> addToLibrary(activity, item) }
+                    val format = if (item.pdfUrl != null) "PDF" else "EPUB"
+                    setPositiveButton("Download $format & add to library") { _, _ -> addToLibrary(activity, item) }
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -73,7 +89,7 @@ object BookActions {
                         coverUrl = item.coverUrl ?: manga.coverUrl
                     )
                 )
-                if (!manga.favorite) app.repo.toggleFavorite(manga)
+                if (!manga.favorite && !LibraryActions.addToLibrary(activity, manga)) return@launch
                 app.repo.refresh(manga)
                 activity.startActivity(MangaDetailsActivity.intent(activity, manga.id))
             } catch (e: CancellationException) {
@@ -99,12 +115,15 @@ object BookActions {
     }
 
     private fun addToLibrary(activity: AppCompatActivity, item: BookItem) {
-        activity.toast("Downloading “${item.title}”…")
         val app = activity.applicationContext.app
-        val queueKey = "epub:${item.sourceId}:${item.key}"
-        app.downloads.reportExternalDownload(queueKey, item.title, "Downloading EPUB")
+        val format = if (item.pdfUrl != null) "PDF" else "EPUB"
+        val queueKey = "${format.lowercase()}:${item.sourceId}:${item.key}"
         activity.lifecycleScope.launch {
             try {
+                val candidate = MangaEntity(source = item.sourceId, url = item.id, title = item.title)
+                if (!LibraryActions.confirmLibraryEntry(activity, candidate)) return@launch
+                activity.toast("Downloading “${item.title}”…")
+                app.downloads.reportExternalDownload(queueKey, item.title, "Downloading $format")
                 val id = withContext(Dispatchers.IO) { download(activity.applicationContext, item) }
                 activity.startActivity(MangaDetailsActivity.intent(activity, id))
             } catch (e: CancellationException) {
@@ -117,17 +136,21 @@ object BookActions {
         }
     }
 
-    /** Saves the EPUB as local/<Title>/<Title>.epub, rescans, and returns the library entry id. */
+    /** Saves a catalog document under local/<Title>/, rescans, and returns the library entry id. */
     private suspend fun download(ctx: Context, item: BookItem): Long {
         val app = ctx.app
         val local = app.storage.localDir() ?: throw IOException("Storage is not available")
         val folderName = item.title.sanitize().take(100)
         val dir = app.storage.findOrCreateDir(local, folderName) ?: throw IOException("Cannot create folder")
 
-        val url = (BookSources.get(item.sourceId) ?: throw IOException("Unknown catalog")).resolveEpubUrl(item)
-        val fileName = "$folderName.epub"
+        val source = BookSources.get(item.sourceId) ?: throw IOException("Unknown catalog")
+        val isPdf = item.pdfUrl != null
+        val extension = if (isPdf) "pdf" else "epub"
+        val mimeType = if (isPdf) "application/pdf" else "application/epub+zip"
+        val url = if (isPdf) source.resolvePdfUrl(item) else source.resolveEpubUrl(item)
+        val fileName = "$folderName.$extension"
         dir.findFile(fileName)?.delete()
-        val file = dir.createFile("application/epub+zip", fileName) ?: throw IOException("Cannot create file")
+        val file = dir.createFile(mimeType, fileName) ?: throw IOException("Cannot create file")
 
         app.network.client.await(Request.Builder().url(url).build()).use { resp ->
             if (!resp.isSuccessful) {

@@ -1,11 +1,14 @@
 package com.imperialreader.data.source
 
 import com.imperialreader.App
+import com.imperialreader.data.search.SearchConcurrencyController
+import com.imperialreader.data.update.LibraryRefreshConcurrencyController
 import com.imperialreader.util.parseChapterNumber
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
@@ -34,6 +37,7 @@ class CombinedSource : Source {
         private val gate = Semaphore(8)
         private val cache = ConcurrentHashMap<String, List<Pair<Member, List<SChapter>>>>()
         private val failures = ConcurrentHashMap<String, List<String>>()
+        private const val MAX_COMICK_RETRY_AFTER_MS = 300_000L
 
         fun failureSummary(members: List<Member>): String? =
             failures[encode(members)]?.take(2)?.joinToString("; ")?.take(180)
@@ -52,7 +56,13 @@ class CombinedSource : Source {
         }.getOrDefault(emptyList())
 
         /** Fetches every member's chapter list in parallel and remembers failures for actionable UI errors. */
-        suspend fun fetchAll(members: List<Member>, title: String): List<Pair<Member, List<SChapter>>> {
+        suspend fun fetchAll(
+            members: List<Member>,
+            title: String,
+            limiter: Semaphore = gate,
+            sharedLimiter: SearchConcurrencyController? = null,
+            libraryRefreshLimiter: LibraryRefreshConcurrencyController? = null
+        ): List<Pair<Member, List<SChapter>>> {
             val outcomes = coroutineScope {
                 members.map { m ->
                     async {
@@ -60,7 +70,34 @@ class CombinedSource : Source {
                         if (source == null) {
                             Triple(m, emptyList(), "Source ${m.sourceId} is unavailable")
                         } else try {
-                            Triple(m, gate.withPermit { source.getChapters(SManga(url = m.url, title = title)) }, null)
+                            suspend fun fetchChapters(): List<SChapter> =
+                                if (sharedLimiter != null) {
+                                    sharedLimiter.withPermit {
+                                        source.getChapters(SManga(url = m.url, title = title))
+                                    }
+                                } else if (libraryRefreshLimiter != null) {
+                                    libraryRefreshLimiter.withSourcePermit(m.sourceId, "chapters") {
+                                        source.getChapters(SManga(url = m.url, title = title))
+                                    }
+                                } else {
+                                    limiter.withPermit {
+                                        source.getChapters(SManga(url = m.url, title = title))
+                                    }
+                                }
+                            var retry = 0
+                            var chapters: List<SChapter>? = null
+                            while (chapters == null) {
+                                try {
+                                    chapters = fetchChapters()
+                                } catch (e: HttpStatusException) {
+                                    if (m.sourceId != "comick" || e.code != 429 || retry >= 2) throw e
+                                    val waitMs = e.retryAfterMs ?: 1_000L
+                                    if (waitMs > MAX_COMICK_RETRY_AFTER_MS) throw e
+                                    retry++
+                                    delay(waitMs)
+                                }
+                            }
+                            Triple(m, checkNotNull(chapters), null)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -117,10 +154,28 @@ class CombinedSource : Source {
     override suspend fun search(query: String, page: Int) = MangasPage(emptyList(), false)
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
+        return getMangaDetails(manga, refreshLimiter = null)
+    }
+
+    suspend fun getMangaDetailsForLibraryRefresh(
+        manga: SManga,
+        refreshLimiter: LibraryRefreshConcurrencyController
+    ): SManga = getMangaDetails(manga, refreshLimiter)
+
+    private suspend fun getMangaDetails(
+        manga: SManga,
+        refreshLimiter: LibraryRefreshConcurrencyController?
+    ): SManga {
         for (m in decode(manga.url)) {
             val source = App.instance.sources.get(m.sourceId) ?: continue
             try {
-                val d = source.getMangaDetails(SManga(url = m.url, title = manga.title))
+                val d = if (refreshLimiter == null) {
+                    source.getMangaDetails(SManga(url = m.url, title = manga.title))
+                } else {
+                    refreshLimiter.withSourcePermit(m.sourceId, "details") {
+                        source.getMangaDetails(SManga(url = m.url, title = manga.title))
+                    }
+                }
                 if (!d.thumbnailUrl.isNullOrBlank()) manga.thumbnailUrl = d.thumbnailUrl
                 manga.description = d.description ?: manga.description
                 manga.author = d.author ?: manga.author
@@ -137,8 +192,20 @@ class CombinedSource : Source {
     }
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
+        return getChapters(manga, refreshLimiter = null)
+    }
+
+    suspend fun getChaptersForLibraryRefresh(
+        manga: SManga,
+        refreshLimiter: LibraryRefreshConcurrencyController
+    ): List<SChapter> = getChapters(manga, refreshLimiter)
+
+    private suspend fun getChapters(
+        manga: SManga,
+        refreshLimiter: LibraryRefreshConcurrencyController?
+    ): List<SChapter> {
         val members = decode(manga.url)
-        val lists = fetchAll(members, manga.title)
+        val lists = fetchAll(members, manga.title, libraryRefreshLimiter = refreshLimiter)
         if (lists.all { it.second.isEmpty() }) {
             val why = failureSummary(members)
             throw IOException(

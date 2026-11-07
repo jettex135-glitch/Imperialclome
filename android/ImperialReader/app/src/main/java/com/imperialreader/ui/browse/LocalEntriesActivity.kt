@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -28,7 +27,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 
 /** Browser and manager for entries stored under the configured local/ directory. */
-class LocalEntriesActivity : AppCompatActivity() {
+class LocalEntriesActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         fun intent(ctx: Context): Intent = Intent(ctx, LocalEntriesActivity::class.java)
@@ -112,7 +111,7 @@ class LocalEntriesActivity : AppCompatActivity() {
                 CardItem(
                     key = "local-${manga.id}",
                     title = manga.title,
-                    cover = manga.coverUrl,
+                    cover = manga.displayCoverUrl,
                     badge2 = if (manga.favorite) "In library" else "Local",
                     tag = manga.id
                 )

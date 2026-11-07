@@ -60,7 +60,8 @@ open class MangaThemesiaSource(
         manga.status = statusFromText(field("Status").orEmpty())
         manga.description = doc.select("div.entry-content[itemprop=description] p, div.entry-content.entry-content-single p")
             .joinToString("\n\n") { it.text() }.ifBlank { null } ?: manga.description
-        manga.genre = doc.select("span.mgen a, .seriestugenre a").joinToString(", ") { it.text() }.ifBlank { null }
+        manga.genre = (doc.select("span.mgen a, .seriestugenre a").map { it.text().trim() } + extractGenreTags(doc))
+            .distinct().joinToString(", ").ifBlank { manga.genre }
         return manga
     }
 

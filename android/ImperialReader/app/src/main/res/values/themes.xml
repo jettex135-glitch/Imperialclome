@@ -13,10 +13,23 @@
         <item name="colorOnSurface">@color/on_surface</item>
         <item name="colorSurfaceVariant">@color/card</item>
         <item name="colorOnSurfaceVariant">@color/on_surface_variant</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Imperial.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Imperial.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Imperial.Large</item>
         <item name="android:colorBackground">@color/black</item>
         <item name="android:statusBarColor">@color/black</item>
         <item name="android:navigationBarColor">@color/nav</item>
         <item name="android:windowAnimationStyle">@style/ActivityAnim</item>
+    </style>
+
+    <style name="ShapeAppearance.Imperial.Small" parent="ShapeAppearance.Material3.Corner.Small">
+        <item name="cornerSize">8dp</item>
+    </style>
+    <style name="ShapeAppearance.Imperial.Medium" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">14dp</item>
+    </style>
+    <style name="ShapeAppearance.Imperial.Large" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerSize">20dp</item>
     </style>
 
     <style name="ActivityAnim" parent="@android:style/Animation.Activity">

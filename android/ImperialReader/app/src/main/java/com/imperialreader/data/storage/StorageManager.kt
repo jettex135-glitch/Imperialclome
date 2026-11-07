@@ -8,7 +8,7 @@ import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.util.NaturalOrder
 import com.imperialreader.util.app
-import com.imperialreader.util.isImageName
+import com.imperialreader.util.isReaderPageName
 import com.imperialreader.util.sanitize
 import java.io.File
 
@@ -107,7 +107,7 @@ class StorageManager(private val ctx: Context) {
     fun downloadedPages(manga: MangaEntity, chapter: ChapterEntity): List<DocumentFile> =
         chapterDir(manga, chapter, create = false)
             ?.listFiles()
-            ?.filter { !it.isDirectory && isImageName(it.name) }
+            ?.filter { !it.isDirectory && isReaderPageName(it.name) }
             ?.sortedWith(compareBy(NaturalOrder) { it.name ?: "" })
             ?: emptyList()
 

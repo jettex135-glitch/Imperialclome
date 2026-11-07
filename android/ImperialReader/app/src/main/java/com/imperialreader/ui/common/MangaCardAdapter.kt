@@ -1,5 +1,7 @@
 package com.imperialreader.ui.common
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -8,9 +10,9 @@ import android.widget.TextView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
 import com.imperialreader.R
 import com.imperialreader.util.dp
+import com.imperialreader.util.toast
 
 data class CardItem(
     val key: String,
@@ -28,8 +30,7 @@ data class CardItem(
 class MangaCardAdapter(
     private val fixedWidthDp: Int? = null,
     private val onClick: (CardItem) -> Unit,
-    private val onLongClick: ((CardItem) -> Unit)? = null,
-    private val onTitleLongClick: ((CardItem) -> Unit)? = null
+    private val onLongClick: ((CardItem) -> Unit)? = null
 ) : ListAdapter<CardItem, MangaCardAdapter.VH>(Diff) {
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
@@ -53,9 +54,7 @@ class MangaCardAdapter(
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = getItem(position)
         holder.title.text = item.title
-        holder.cover.load(item.cover) {
-            item.headers.forEach { (k, v) -> addHeader(k, v) }
-        }
+        holder.cover.loadCover(item.cover, item.headers)
         holder.itemView.alpha = if (item.dim) 0.5f else 1f
         bindBadge(holder.badge1, item.badge1)
         bindBadge(holder.badge2, item.badge2)
@@ -67,8 +66,9 @@ class MangaCardAdapter(
             onLongClick != null
         }
         holder.title.setOnLongClickListener {
-            val callback = onTitleLongClick ?: return@setOnLongClickListener false
-            callback(item)
+            val clipboard = holder.title.context.getSystemService(ClipboardManager::class.java)
+            clipboard.setPrimaryClip(ClipData.newPlainText("Title", item.title))
+            holder.title.context.toast("Title copied")
             true
         }
     }

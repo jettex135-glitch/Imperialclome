@@ -38,6 +38,10 @@
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingBottom="6dp"
             android:text="Nothing is queued" android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+        <Button android:id="@+id/queuePauseAll"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="end" android:layout_marginStart="16dp" android:layout_marginEnd="16dp"
+            android:text="Pause all" android:visibility="gone"/>
         <TextView android:id="@+id/queueEmpty"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="8dp" android:paddingBottom="16dp"
@@ -72,6 +76,16 @@
         <LinearLayout android:id="@+id/rowSettings" style="@style/MoreRow">
             <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_settings" android:contentDescription="settings"/>
             <TextView style="@style/MoreRowTitle" android:text="Settings"/>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowAppUpdate" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_refresh" android:contentDescription="app updates"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Check for app updates"/>
+                <TextView android:id="@+id/appUpdateSub" style="@style/MoreRowSub"
+                    android:text="Download the latest APK from GitHub release V9"/>
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout android:id="@+id/rowBackup" style="@style/MoreRow">

@@ -1,6 +1,7 @@
 package com.imperialreader.data.source
 
 import com.imperialreader.util.parseChapterNumber
+import com.imperialreader.data.network.CloudflareException
 import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -18,41 +19,73 @@ class ReadComicsOnlineSource : HttpSource() {
     private val generic = GenericSource(name, baseUrl)
 
     override suspend fun getPopular(page: Int): MangasPage =
-        list("$baseUrl/comic-list?sort=views&page=${page.coerceAtLeast(1)}", page)
+        list(
+            listOf(
+                "$baseUrl/comic-list?sort=views&page=${page.coerceAtLeast(1)}",
+                "$baseUrl/comic-list?sort=latest&page=${page.coerceAtLeast(1)}",
+                "$baseUrl/comic-list?page=${page.coerceAtLeast(1)}"
+            ), page
+        )
 
     override suspend fun getLatest(page: Int): MangasPage =
-        list("$baseUrl/comic-list?sort=latest&page=${page.coerceAtLeast(1)}", page)
+        list(
+            listOf(
+                "$baseUrl/comic-list?sort=latest&page=${page.coerceAtLeast(1)}",
+                "$baseUrl/comic-list?page=${page.coerceAtLeast(1)}"
+            ), page
+        )
 
     override suspend fun search(query: String, page: Int): MangasPage =
-        list("$baseUrl/advanced-search?name=${enc(query.trim())}&page=${page.coerceAtLeast(1)}", page)
+        list(
+            listOf(
+                "$baseUrl/advanced-search?name=${enc(query.trim())}&page=${page.coerceAtLeast(1)}",
+                "$baseUrl/search?keyword=${enc(query.trim())}&page=${page.coerceAtLeast(1)}",
+                "$baseUrl/?s=${enc(query.trim())}&paged=${page.coerceAtLeast(1)}"
+            ), page
+        )
 
-    private suspend fun list(url: String, page: Int): MangasPage {
+    private suspend fun list(urls: List<String>, page: Int): MangasPage {
+        var lastError: Exception? = null
+        var receivedPage = false
+        for (url in urls.distinct()) try {
         val doc = Jsoup.parse(getString(url), url)
-        val searchResults = "advanced-search" in url
-        val items = if (searchResults) doc.select("div a[href]:has(img)")
-            else doc.select("div.comic-list-layout .grid > .group")
-        val mangas = items.mapNotNull { item ->
-            val link = if (searchResults) item else
-                item.selectFirst("a.block.text-sm.font-semibold[href], a[href]") ?: return@mapNotNull null
+        receivedPage = true
+        val mangas = doc.select("a[href]").mapNotNull { link ->
             val path = sitePath(link.absUrl("href"))?.trimEnd('/') ?: return@mapNotNull null
             if (!path.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE))) return@mapNotNull null
-            val image = item.selectFirst("img") ?: link.selectFirst("img")
-            val title = listOf(link.attr("title"), item.selectFirst(".text-sm.font-semibold")?.text().orEmpty(), image?.attr("alt").orEmpty(), link.text())
-                .map(String::trim).firstOrNull(String::isNotBlank) ?: return@mapNotNull null
-            SManga(
-                url = "$baseUrl$path",
-                title = title,
-                thumbnailUrl = imageUrl(image)
-            )
+            val card = sequenceOf(link).plus(link.parents().take(5))
+                .firstOrNull { it.selectFirst("img") != null } ?: return@mapNotNull null
+            val image = card.selectFirst("img") ?: return@mapNotNull null
+            val title = sequenceOf(
+                link.attr("title"), link.text(),
+                card.selectFirst("h1, h2, h3, h4, .font-semibold, [title]")?.text().orEmpty(),
+                image.attr("alt").orEmpty()
+            ).map(String::trim).firstOrNull(String::isNotBlank) ?: return@mapNotNull null
+            SManga(url = "$baseUrl$path", title = title, thumbnailUrl = imageUrl(image))
         }.distinctBy { it.url }
-        return MangasPage(mangas, hasNextPage(doc, page))
+        if (mangas.isNotEmpty()) return MangasPage(mangas, hasNextPage(doc, page))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: CloudflareException) {
+            throw e
+        } catch (e: Exception) {
+            lastError = e
+        }
+        if (receivedPage) return MangasPage(emptyList(), false)
+        throw lastError ?: IOException("ReadComicsOnline did not return a readable catalog page")
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga = generic.getMangaDetails(manga)
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val doc = Jsoup.parse(getString(manga.url), manga.url)
-        val chapters = doc.select(".overflow-hidden.border-ink-600 > a[href]").mapNotNull { link ->
+        val markedLinks = doc.select(".overflow-hidden.border-ink-600 > a[href]")
+        val chapterPattern = Regex("""(?i)(?:^|[-/])(?:chapter|issue|volume|vol)[-_/ ]*#?\d+(?:\.\d+)?(?:$|[-/])""")
+        val chapterLinks = (markedLinks + doc.select("a[href]").filter { link ->
+            val url = link.absUrl("href")
+            sitePath(url) != null && chapterPattern.containsMatchIn(URI(url).path.orEmpty())
+        }).distinctBy { it.absUrl("href") }
+        val chapters = chapterLinks.mapNotNull { link ->
             val url = link.absUrl("href")
             if (sitePath(url) == null) return@mapNotNull null
             val name = listOf(link.selectFirst(".text-brand-400")?.text().orEmpty(), link.attr("title"), link.text(), link.attr("aria-label"))

@@ -1,5 +1,8 @@
 package com.imperialreader.data.source
 
+import org.json.JSONArray
+import org.json.JSONObject
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.text.SimpleDateFormat
@@ -16,6 +19,61 @@ internal fun lazyImage(img: Element?): String? {
         if (u.isNotBlank() && !u.startsWith("data:")) return u
     }
     return null
+}
+
+internal fun extractGenreTags(doc: Document): List<String> {
+    val genres = LinkedHashSet<String>()
+    fun add(value: String) {
+        value.split(Regex("\\s*[,;|•]\\s*"))
+            .map { it.trim().trim('.', ':') }
+            .filter { it.isNotBlank() && it.length < 60 }
+            .forEach(genres::add)
+    }
+    fun addJson(value: Any?) {
+        when (value) {
+            is String -> add(value)
+            is JSONArray -> for (index in 0 until value.length()) addJson(value.opt(index))
+            is JSONObject -> addJson(value.opt("name"))
+        }
+    }
+
+    doc.select(
+        "[itemprop=genre], .genres a, .genre a, .tags a, .tag a, .mgen a, .seriestugenre a, " +
+            ".genre-list a, .tag-list a, [class*=genre] a, [class*=tag] a, " +
+            "a[href*=/genre/], a[href*=/genres/], a[href*=/tag/], a[href*=/tags/]"
+    ).forEach { element ->
+        if (element.parents().any { it.tagName() in setOf("nav", "header", "footer") }) return@forEach
+        add(element.attr("content").ifBlank { element.text().trim() })
+    }
+    doc.select("meta[name=keywords], meta[property=article:tag], meta[property=book:tag]")
+        .forEach { add(it.attr("content")) }
+    doc.select("li, p, div, span, td, tr").forEach { element ->
+        if (element.parents().any { it.tagName() in setOf("nav", "header", "footer") }) return@forEach
+        val text = element.ownText().trim()
+        Regex("(?i)^(?:genres?|tags?)\\s*:\\s*(.+)$").matchEntire(text)
+            ?.groupValues?.get(1)?.let(::add)
+    }
+    doc.select("script[type=application/ld+json]").forEach { script ->
+        runCatching { JSONObject(script.data().ifBlank { script.html() }) }
+            .getOrNull()?.let { root ->
+                fun scan(value: Any?) {
+                    when (value) {
+                        is JSONObject -> {
+                            val keys = value.keys()
+                            while (keys.hasNext()) {
+                                val key = keys.next()
+                                val nested = value.opt(key)
+                                if (key.equals("genre", true) || key.equals("keywords", true)) addJson(nested)
+                                else scan(nested)
+                            }
+                        }
+                        is JSONArray -> for (index in 0 until value.length()) scan(value.opt(index))
+                    }
+                }
+                scan(root)
+            }
+    }
+    return genres.toList()
 }
 
 internal fun parseSiteDate(text: String): Long {
