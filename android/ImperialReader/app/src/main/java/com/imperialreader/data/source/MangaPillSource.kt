@@ -4,14 +4,15 @@ import com.imperialreader.util.parseChapterNumber
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 
-/** https://mangapill.com — written from the site's known layout; not verified live. */
+/** MangaPill catalog and chapter lists. */
 class MangaPillSource : HttpSource() {
     override val id = "mangapill"
     override val name = "MangaPill"
     override val lang = "en"
     override val baseUrl = "https://mangapill.com"
 
-    override suspend fun getPopular(page: Int): MangasPage = list("$baseUrl/search?q=&type=&status=&page=$page", page)
+    override suspend fun getPopular(page: Int): MangasPage =
+        if (page == 1) list("$baseUrl/", page, singlePage = true) else MangasPage(emptyList(), false)
     override suspend fun getLatest(page: Int): MangasPage = list("$baseUrl/chapters", page, singlePage = true)
     override suspend fun search(query: String, page: Int): MangasPage =
         list("$baseUrl/search?q=${enc(query)}&type=&status=&page=$page", page)

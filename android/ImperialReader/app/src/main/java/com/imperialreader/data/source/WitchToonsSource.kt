@@ -2,9 +2,11 @@ package com.imperialreader.data.source
 
 import com.imperialreader.util.parseChapterNumber
 import org.json.JSONObject
-import org.jsoup.Jsoup
+import org.json.JSONArray
 import java.io.IOException
 import java.net.URI
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 class WitchToonsSource : HttpSource() {
     override val id = "witchtoons_net"
@@ -55,61 +57,142 @@ class WitchToonsSource : HttpSource() {
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
-        val doc = Jsoup.parse(getString(manga.url), manga.url)
-        manga.title = doc.selectFirst("h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
-            ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore(" | ")
-                ?.takeIf { it.isNotBlank() }
-            ?: manga.title
-        manga.description = doc.selectFirst("meta[property=og:description], meta[name=description]")
-            ?.attr("content")?.takeIf { it.isNotBlank() } ?: manga.description
-        manga.thumbnailUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")
-            ?.takeIf { it.isNotBlank() }?.let(::absoluteUrl) ?: manga.thumbnailUrl
+        val seriesPath = runCatching { URI(manga.url).path.trimEnd('/') }.getOrNull()
+            ?.takeIf { it.startsWith("/series/comic/") && it.count { char -> char == '/' } == 3 }
+            ?: throw IOException("WitchToons returned an invalid series address")
+        val series = getSeriesPage(seriesPath, 1).series
+        series.optString("title")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?.let { manga.title = it }
+        series.optString("coverImage")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?.let { manga.thumbnailUrl = absoluteUrl(it) }
+        series.optString("description").takeIf { it.isNotBlank() && it != "null" }
+            ?.let { manga.description = it }
+        manga.status = when (series.optString("status").uppercase()) {
+            "ONGOING" -> 1
+            "COMPLETED" -> 2
+            "HIATUS", "CANCELLED", "CANCELED" -> 3
+            else -> manga.status
+        }
         return manga
     }
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val seriesPath = runCatching { URI(manga.url).path.trimEnd('/') }.getOrNull()
-            ?.takeIf { it.startsWith("/series/") }
+            ?.takeIf { it.startsWith("/series/comic/") && it.count { char -> char == '/' } == 3 }
             ?: throw IOException("WitchToons returned an invalid series address")
-        val firstPage = chapterList("$baseUrl$seriesPath")
-        val lastPage = firstPage.second
-        if (lastPage > MAX_CHAPTER_PAGES) {
+        val firstPage = getSeriesPage(seriesPath, 1)
+        if (firstPage.totalPages > MAX_CHAPTER_PAGES) {
             throw IOException("WitchToons chapter list exceeds the safe limit of $MAX_CHAPTER_PAGES pages")
         }
         val chapters = LinkedHashMap<String, SChapter>()
-        firstPage.first.forEach { chapters[it.url] = it }
-        for (page in 2..lastPage) {
-            chapterList("$baseUrl$seriesPath?page=$page").first.forEach { chapters[it.url] = it }
+        firstPage.chapters.forEach { chapter -> chapters[chapter.url] = chapter }
+        for (page in 2..firstPage.totalPages) {
+            getSeriesPage(seriesPath, page).chapters.forEach { chapter ->
+                chapters[chapter.url] = chapter
+            }
         }
         if (chapters.isEmpty()) throw IOException("WitchToons returned no chapters for this series")
         return chapters.values.sortedByDescending { it.chapterNumber }
     }
 
-    private suspend fun chapterList(url: String): Pair<List<SChapter>, Int> {
-        val doc = Jsoup.parse(getString(url), url)
-        val seriesPath = runCatching { URI(url).path.trimEnd('/') }.getOrNull().orEmpty()
-        val chapters = doc.select("a[href]").mapNotNull { link ->
-            val href = link.absUrl("href")
-            val path = runCatching { URI(href).path.trimEnd('/') }.getOrNull().orEmpty()
-            if (!path.startsWith("$seriesPath/chapter/")) return@mapNotNull null
-            val name = link.text().trim().ifBlank { link.attr("title").trim() }
-            val chapterNumber = path.substringAfterLast('/').toFloatOrNull()
-                ?: parseChapterNumber(name)
-            if (name.isBlank() && chapterNumber < 0f) return@mapNotNull null
-            SChapter(
-                url = href,
-                name = name.ifBlank { "Chapter ${chapterNumber.toInt()}" },
-                chapterNumber = chapterNumber
-            )
-        }.distinctBy { it.url }
+    private data class SeriesPage(
+        val series: JSONObject,
+        val chapters: List<SChapter>,
+        val totalPages: Int
+    )
 
-        val lastPage = doc.select("a[href]").mapNotNull { link ->
-            val target = runCatching { URI(link.absUrl("href")) }.getOrNull() ?: return@mapNotNull null
-            if (target.path.trimEnd('/') != seriesPath) return@mapNotNull null
-            Regex("""(?:^|&)page=(\d+)(?:&|$)""").find(target.rawQuery.orEmpty())
-                ?.groupValues?.get(1)?.toIntOrNull()
-        }.maxOrNull() ?: 1
-        return chapters to lastPage
+    private suspend fun getSeriesPage(seriesPath: String, page: Int): SeriesPage {
+        val query = if (page == 1) "?sort=desc" else "?sort=desc&page=$page"
+        val response = getString("$baseUrl$seriesPath$query", RSC_HEADERS)
+        val series = response.extractJsonObject("series")
+            ?: throw IOException("WitchToons returned no series details")
+        val chapterData = response.extractJsonArray("chapters")
+            ?: throw IOException("WitchToons returned no chapter list")
+        val totalPages = Regex(""""totalPages"\s*:\s*(\d+)""")
+            .find(response.substring(chapterData.second))
+            ?.groupValues?.get(1)?.toIntOrNull()
+            ?: throw IOException("WitchToons returned no chapter page count")
+        val slug = seriesPath.substringAfterLast('/')
+        val chapters = (0 until chapterData.first.length()).mapNotNull { index ->
+            chapterData.first.optJSONObject(index)?.toChapter(slug)
+        }
+        return SeriesPage(series, chapters, totalPages.coerceAtLeast(1))
+    }
+
+    private fun JSONObject.toChapter(seriesSlug: String): SChapter? {
+        val number = optString("number").takeIf { it.isNotBlank() && it != "null" } ?: return null
+        val chapterNumber = number.toFloatOrNull() ?: parseChapterNumber(number)
+        if (chapterNumber < 0f) return null
+        val title = optString("title").takeIf { it.isNotBlank() && it != "null" && it != number }
+        val name = title ?: "Chapter ${number.removeSuffix(".0")}"
+        val dateUpload = try {
+            optString("publishedAt").takeIf { it.isNotBlank() && it != "null" }
+                ?.let { Instant.parse(it).toEpochMilli() } ?: 0L
+        } catch (_: DateTimeParseException) {
+            0L
+        }
+        return SChapter(
+            url = "$baseUrl/series/comic/$seriesSlug/chapter/${number.removeSuffix(".0")}",
+            name = name,
+            dateUpload = dateUpload,
+            chapterNumber = chapterNumber
+        )
+    }
+
+    private fun String.extractJsonObject(key: String): JSONObject? {
+        val json = extractJsonContainer(key, '{') ?: return null
+        return runCatching { JSONObject(json.first) }.getOrNull()
+    }
+
+    private fun String.extractJsonArray(key: String): Pair<JSONArray, Int>? {
+        val json = extractJsonContainer(key, '[') ?: return null
+        val array = runCatching { JSONArray(json.first) }.getOrNull() ?: return null
+        return array to json.second
+    }
+
+    private fun String.extractJsonContainer(key: String, opening: Char): Pair<String, Int>? {
+        val marker = """"$key""""
+        var markerIndex = indexOf(marker)
+        while (markerIndex >= 0) {
+            var start = markerIndex + marker.length
+            while (start < length && this[start].isWhitespace()) start++
+            if (start < length && this[start] == ':') {
+                start++
+                while (start < length && this[start].isWhitespace()) start++
+                if (start < length && this[start] == opening) {
+                    val closing = if (opening == '{') '}' else ']'
+                    var depth = 0
+                    var inString = false
+                    var escaped = false
+                    for (index in start until length) {
+                        val char = this[index]
+                        if (inString) {
+                            when {
+                                escaped -> escaped = false
+                                char == '\\' -> escaped = true
+                                char == '"' -> inString = false
+                            }
+                        } else {
+                            when {
+                                char == '"' -> inString = true
+                                char == '{' || char == '[' -> depth++
+                                char == '}' || char == ']' -> {
+                                    depth--
+                                    if (depth == 0 && char == closing) {
+                                        return substring(start, index + 1) to index + 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return null
+                }
+            }
+            markerIndex = indexOf(marker, markerIndex + marker.length)
+        }
+        return null
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
@@ -131,6 +214,7 @@ class WitchToonsSource : HttpSource() {
     }
 
     private companion object {
+        val RSC_HEADERS = mapOf("rsc" to "1")
         const val PAGE_SIZE = 100
         const val MAX_CHAPTER_PAGES = 1000
     }

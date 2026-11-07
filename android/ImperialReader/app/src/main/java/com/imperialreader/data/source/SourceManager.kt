@@ -11,26 +11,29 @@ class SourceManager(private val context: Context) {
      */
     private val builtin: List<Source> = listOf(
         MangaDexSource(),
+        ComickSource(),
+        WebtoonsSource(),
         MangaKSource(),
         MangaKatanaSource(),
         MangaPillSource(),
+        MangaFreakSource(),
         MangaBuddySource(),
         ThunderScansSource(),
-        HentaiDbSource(),
         NhentaiXxxSource(),
         NineHentaiSource(),
-        ComicHubFreeSource(),
+        ImhentaiXxxSource(),
+        DoujinsSource(),
+        EHentaiSource(),
+        TapasSource(),
         ReadComicsOnlineSource(),
+        RoliaScanSource(),
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
         NightScanSource(),
         WitchToonsSource(),
-        WordPressSource(
-            "PhiliaScans",
-            "https://philiascans.org",
-            idOverride = "wp_philiascans_com"
-        ),
-        WordPressSource("RavenScans", "https://ravenscans.com"),
+        PhiliaScansSource(),
+        RavenScansSource(),
+        ManhwaHubSource(),
         StoneScapeSource(),
         WordPressSource("Cocomic", "https://cocomic.co", idOverride = "wp_cocomics_com"),
         WordPressSource("RokariComics", "https://rokaricomics.com"),
@@ -42,13 +45,20 @@ class SourceManager(private val context: Context) {
         HentaraSource(),
         Manga18Source("Manga18 ME", "https://manga18.me"),
         MangaFireSource(),
+        MadaraSource(
+            "AllPornComic",
+            "https://allporncomic.com",
+            mangaPath = "comic",
+            idOverride = "generic_allporncomic_com",
+            nsfw = true
+        ),
+        HentaiCosplaySource(),
+        PawchiveSource(),
         // Western comics
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),
         // 18+ (hidden until enabled in Settings)
-        WordPressSource("ManhuaUS", "https://manhuaus.com", nsfw = true),
-        EHentaiSource(),
-        WordPressSource("IMHentai", "https://imhentai.xxx", nsfw = true)
+        WordPressSource("ManhuaUS", "https://manhuaus.com", nsfw = true)
     )
 
     private fun custom(): List<Source> =

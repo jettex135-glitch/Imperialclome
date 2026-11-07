@@ -1,24 +1,25 @@
 # Imperial Reader
 
 A Mihon/Tachiyomi-style manga reader for Android (Kotlin, Views + Material 3, Room, OkHttp, Jsoup, Coil).
-Black-and-gold "Imperial" theme, Mihon layout: **Library · Updates · History · Browse · More**.
+Black-and-aged-gold "Imperial" theme, Mihon layout: **Library · Updates · History · Browse · More**.
 
 ## Features
 
 | Area | What you get |
 |---|---|
 | Library | Cover grid, unread / downloaded / Local badges, search, filters, sort, pull-to-refresh library update, automatic cover refresh on app start with a configurable frequency, bulk mark-as-read and optional download deletion on removal, 2–5 columns |
-| Auto global search | Searching the library with no match + pressing search opens **Global search** (library first, then all sources in parallel, ranked by chapter count then latest upload) |
+| Auto global search | Searching the library with no match + pressing search opens **Global search** (library first, then sources with up to five concurrent operations, progressive results, bounded transient-error retries, and a retry-failed-sources action) |
 | Updates / History | New-chapter feed, read-history with resume, clear/remove |
 | Browse | **Sources** (Popular / Latest / Search, infinite scroll, add any site by URL) and **Extensions** = Local library manager plus EPUB / web-novel catalogs (Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and dozens of QuickNovel-style novel sites) |
 | Built-in sources | MangaDex (official API) + a list of Madara-theme sites (see "Sources" below) |
-| Details | Cover/info header, add to library, chapter list with read / bookmark / download state, Start / Resume / Read again |
-| Reader | Left-to-right, right-to-left, vertical webtoon, tap zones, seek bar, prev/next chapter, volume keys, progress + history saving, fullscreen, keep-screen-on |
-| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, and EPUB chapters. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
+| Details | Cover/info header, temporary cover-matched colors while the chapter list is open, add to library, chapter list with read / bookmark / download state, Start / Resume / Read again |
+| Reader | Left-to-right, right-to-left, vertical webtoon, tap zones, seek bar, prev/next chapter, volume keys, progress + history saving, fullscreen, keep-screen-on, GIF pages, MP4 playback, and optional WEBTOON episode audio; optional scanlation-aware duplicate chapter and gaiden skipping |
+| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, EPUB, PSD, PSB, and CLIP chapters; PSD/PSB/CLIP use embedded previews when present. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
 | EPUB / web novels | Light-novel reading controls, section seek/progress, contents list, font size, dark/sepia/light themes, and text-to-speech |
 | PDF | Local PDFs open in a paged reader with page seeking, previous/next controls, and persisted page progress |
-| Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` |
-| Cloudflare | In-app WebView shares cookies with the HTTP client: solve the challenge once, then retry |
+| Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` (MP4 media is saved as `.mp4`) |
+| Appearance | Consistent black theme with aged-gold accents. |
+| Cloudflare | Network-layer detection distinguishes actual Cloudflare challenges from ordinary HTTP/network errors. Challenge resolution uses the in-app WebView and shared cookies; if automatic resolution fails, open the source in WebView and retry |
 
 ## Build it on GitHub (no PC tooling needed)
 
@@ -83,7 +84,7 @@ More → Storage folder → pick the folder → More → Scan local library. Alt
 Built in:
 
 * **KingOfShojo** (https://kingofshojo.com) uses the MangaThemesia engine directly (site structure confirmed live; it also carries some mature titles).
-* **Dedicated scrapers:** MangaDex (official API, most reliable), **Thunderscans** (catalog search, comics browsing, unlocked chapters, and embedded reader images confirmed against the live site), **Manhwa18** (live chapter images and listings), **DemonicScans**, **MangaFire** (filter search, AJAX chapters and page lists), **NightScan** (public catalog API, English chapters with other published translations as a fallback, and reader pages), **WitchToons** (paginated catalog, title search, chapter lists, and reader images), **Hentara**, **Manga18.ME**, **AsuraScans**, **MangaKatana** (URL patterns confirmed against the live site), **MangaPill** and **MangaBuddy** (written from the sites' known layouts, not verified live).
+* **Dedicated scrapers:** MangaDex (official API, most reliable), **WEBTOON** (English catalog, episodes, viewer images, and episode audio when provided by the source), **Hentai Cosplay XXX** (site-specific gallery listings, details, and images), **Thunderscans** (catalog search, comics browsing, unlocked chapters, and embedded reader images confirmed against the live site), **Manhwa18** (live chapter images and listings), **DemonicScans**, **MangaFire** (filter search, AJAX chapters and page lists), **NightScan** (public catalog API, English chapters with other published translations as a fallback, and reader pages), **WitchToons** (paginated catalog, title search, chapter lists, and reader images), **Hentara**, **Manga18.ME**, **AsuraScans**, **MangaKatana** (URL patterns confirmed against the live site), **MangaPill** and **MangaBuddy** (written from the sites' known layouts, not verified live).
 * **StoneScape** uses its public catalog API for series listings, search, chapters, and reader pages.
 * **WordPress sites (auto-detecting):** each one looks at the site's home page the first time you use it and picks the **Madara**, **MangaThemesia**, or generic site engine automatically. Toonily, LuminousScans, PhiliaScans (philiascans.org), RavenScans, Cocomics, RokariComics, ManhwaRead, Manga18.club, TritiniaScans, VortexScans.
 
@@ -91,11 +92,15 @@ Scanlation domains change or die constantly and several sit behind Cloudflare, s
 
 ## Newer features
 
+* **Global Search reliability:** Up to five source operations run concurrently; remaining work queues behind the shared limit. Successful results appear progressively, transient failures receive bounded retries, and **Retry failed sources** reuses the query while retaining existing results. Progress shows aggregate incomplete counts rather than listing failed source names; "Show only sources with results" hides sources without results.
+* **Comick networking:** Comick uses its public catalog API through the shared HTTP client and request limiter. Actual challenge responses are handled separately from ordinary status codes and network failures; WebView cookies are shared with HTTP requests, and 429 responses respect `Retry-After`.
 * **Combined titles:** Global search groups the same title from every source into ONE row with all chapters merged (most up-to-date count, newest first). Reading picks the first source that has the chapter and falls back to the next automatically. Untick "Combine…" for per-source rows; "Show only sources with results" hides empty sources.
+* **Scanlation-aware chapter navigation:** Enable **More → Settings → Skip duplicate chapters and gaidens** to prefer the scanlation currently being read, mark skipped duplicate variants and gaidens read, and continue with another scanlation when the current one has no unread chapters remaining. Off by default.
 * **EPUBs and novels in search:** Global search searches EPUB catalogs and web-novel sources, including NovelArrow, and preserves matching titles from separate catalogs. The optional filter menu can search by genre/tag and artist.
 * **Web novels (QuickNovel-style):** Browse → Extensions lists the novel catalogs, including NovelPing and NovelArrow. Tap a novel → *Download as EPUB* (first 25 / 100 / 300 / all chapters) builds a real EPUB in `local/`. Newly published chapters are included in library refreshes and appear in Updates after the initial chapter sync. Re-downloading replaces the file instead of duplicating.
 * **EPUB reader:** section seek/progress, contents list, font size, dark / sepia / light themes, **read-aloud (text-to-speech)** that continues into the next section.
 * **Library:** categories (tabs, create / rename / delete, assign when adding and later via long-press), filters (unread, downloaded, bookmarked), sorts incl. *Recently updated*, long-press → mark whole entry read / unread, badge toggles, optional update on start.
+* **Library refresh:** checks every online entry with up to 10 concurrent source operations, including combined-source requests, then scans local entries. Periodic and on-app-start automatic refreshes run through foreground WorkManager jobs with a progress notification, so they can continue when the app is backgrounded or closed (Android may defer scheduled work or stop it after a force-stop).
 * **Backup and restore:** More → Backup and restore saves/loads a JSON file (library, categories, read progress, bookmarks, history, app preferences, custom sources added by URL, and reader preferences including per-title modes and EPUB theme). Automatic backups include the same data. Restore merges library data without losing read state and restores backed settings. Device-specific storage access and automatic-backup status are not transferred.
 * **Local library:** CBZ/ZIP, **CBR/RAR (RAR 2–4)**, PDF, EPUB and image folders. Covers are extracted (cover.jpg → first page → PDF/EPUB cover) and refresh automatically when the files change; switch off in Settings → Local library.
 * **Duplicates:** same entry through another URL form = one row (newer data overwrites). Adding a title you already have from another source asks first. Adding the same site twice replaces the older custom entry.

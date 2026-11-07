@@ -8,8 +8,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -17,6 +17,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.chip.ChipGroup
 import com.imperialreader.R
 import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.data.source.MangasPage
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.source.Source
 import com.imperialreader.ui.common.CardItem
@@ -27,9 +28,12 @@ import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
-class SourceBrowseActivity : AppCompatActivity() {
+class SourceBrowseActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private const val EXTRA_SOURCE = "source_id"
@@ -49,13 +53,23 @@ class SourceBrowseActivity : AppCompatActivity() {
     private lateinit var errorText: TextView
 
     private var mode = 0 // 0 popular, 1 latest, 2 search
+    private var genreOnly = false
     private var query = ""
     private var page = 1
     private var hasNext = true
     private var loading = false
     private var loadJob: Job? = null
+    private var searchDebounceJob: Job? = null
+    private var cloudflareUrl: String? = null
     private val items = mutableListOf<SManga>()
     private var favoriteUrls: Set<String> = emptySet()
+    private val openChallengeBrowser =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (cloudflareUrl != null) {
+                cloudflareUrl = null
+                reset()
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,17 +111,20 @@ class SourceBrowseActivity : AppCompatActivity() {
         searchView.queryHint = "Search ${source.name}"
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(q: String?): Boolean {
-                val text = q.orEmpty().trim()
-                if (text.isNotBlank()) {
-                    query = text
-                    mode = 2
-                    reset()
-                }
+                searchDebounceJob?.cancel()
+                applySearchQuery(q.orEmpty())
                 searchView.clearFocus()
                 return true
             }
 
-            override fun onQueryTextChange(newText: String?): Boolean = true
+            override fun onQueryTextChange(newText: String?): Boolean {
+                searchDebounceJob?.cancel()
+                searchDebounceJob = lifecycleScope.launch {
+                    delay(350)
+                    applySearchQuery(newText.orEmpty())
+                }
+                return true
+            }
         })
         searchItem.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
             override fun onMenuItemActionExpand(item: MenuItem): Boolean = true
@@ -120,8 +137,13 @@ class SourceBrowseActivity : AppCompatActivity() {
             }
         })
         toolbar.setOnMenuItemClickListener {
-            if (it.itemId == R.id.action_webview) {
-                startActivity(WebViewActivity.intent(this, source.baseUrl))
+            when (it.itemId) {
+                R.id.action_webview -> startActivity(WebViewActivity.intent(this, source.baseUrl))
+                R.id.action_genre_search -> {
+                    genreOnly = !genreOnly
+                    it.isChecked = genreOnly
+                    reset()
+                }
             }
             true
         }
@@ -135,7 +157,7 @@ class SourceBrowseActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnRetry).setOnClickListener { reset() }
         findViewById<Button>(R.id.btnOpenWeb).setOnClickListener {
-            startActivity(WebViewActivity.intent(this, source.baseUrl))
+            openChallengeBrowser.launch(WebViewActivity.intent(this, cloudflareUrl ?: source.baseUrl))
         }
 
         reset()
@@ -162,6 +184,14 @@ class SourceBrowseActivity : AppCompatActivity() {
         loadPage()
     }
 
+    private fun applySearchQuery(text: String) {
+        query = text.trim()
+        mode = if (query.isBlank()) {
+            if (findViewById<ChipGroup>(R.id.chips).checkedChipId == R.id.chipLatest) 1 else 0
+        } else 2
+        reset()
+    }
+
     private fun loadPage() {
         if (loading) return
         loading = true
@@ -169,20 +199,40 @@ class SourceBrowseActivity : AppCompatActivity() {
         loadJob = lifecycleScope.launch {
             try {
                 favoriteUrls = app.db.mangaDao().favoriteUrls(source.id).toSet()
-                val result = when (mode) {
-                    0 -> source.getPopular(page)
-                    1 -> source.getLatest(page)
-                    else -> source.search(query, page)
+                val titleResults = when {
+                    mode == 0 -> source.getPopular(page)
+                    mode == 1 -> source.getLatest(page)
+                    mode == 2 && !genreOnly -> source.search(query, page)
+                    else -> MangasPage(emptyList(), false)
                 }
-                result.mangas.forEach { m -> if (items.none { it.url == m.url }) items.add(m) }
-                hasNext = result.hasNextPage
+                var genreError: String? = null
+                val genreResults = if (mode == 2 && query.isNotBlank() && (genreOnly || query.length >= 2)) {
+                    try {
+                        withTimeout(12_000L) { source.searchByGenre(query, page) }
+                    } catch (e: TimeoutCancellationException) {
+                        genreError = "Genre search timed out"
+                        MangasPage(emptyList(), false)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        genreError = e.message ?: "Genre search failed"
+                        MangasPage(emptyList(), false)
+                    }
+                } else MangasPage(emptyList(), false)
+                (titleResults.mangas + genreResults.mangas).forEach { m ->
+                    if (items.none { it.url == m.url }) items.add(m)
+                }
+                hasNext = titleResults.hasNextPage || genreResults.hasNextPage
                 page++
                 render()
-                if (items.isEmpty()) showError("No results")
+                if (items.isEmpty()) showError(genreError?.let { "Genre search failed: $it" } ?: "No results")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (items.isEmpty()) showError(e.message ?: "Failed to load", e is CloudflareException)
+                if (items.isEmpty()) {
+                    val challenge = (e as? CloudflareException)?.url
+                    showError(e.message ?: "Failed to load", challenge)
+                }
                 else toast(e.message ?: "Failed to load more")
             } finally {
                 loading = false
@@ -191,9 +241,10 @@ class SourceBrowseActivity : AppCompatActivity() {
         }
     }
 
-    private fun showError(message: String, cloudflare: Boolean = false) {
+    private fun showError(message: String, challengeUrl: String? = null) {
+        cloudflareUrl = challengeUrl
         errorText.text = message
-        findViewById<View>(R.id.btnOpenWeb).visibility = if (cloudflare) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btnOpenWeb).visibility = if (challengeUrl != null) View.VISIBLE else View.GONE
         errorView.visibility = View.VISIBLE
     }
 

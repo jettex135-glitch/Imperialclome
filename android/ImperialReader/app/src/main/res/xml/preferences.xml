@@ -31,6 +31,12 @@
             android:title="Volume keys turn pages"
             android:defaultValue="false"
             app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="skip_duplicate_chapters_and_gaidens"
+            android:title="Skip duplicate chapters and gaidens"
+            android:summary="Prefer the current scanlation and mark skipped duplicates and gaidens as read"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Library" app:iconSpaceReserved="false">
@@ -54,9 +60,45 @@
             app:iconSpaceReserved="false"/>
         <SwitchPreferenceCompat
             android:key="refresh_on_start"
-            android:title="Update library on app start"
-            android:summary="Checks every entry for new chapters when the app opens"
+            android:title="Automatic library updates"
+            android:summary="Automatically checks for new chapters at the selected frequency"
             android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="library_update_frequency"
+            android:title="Library update frequency"
+            android:entries="@array/library_update_interval_names"
+            android:entryValues="@array/library_update_interval_values"
+            android:defaultValue="0"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Downloads" app:iconSpaceReserved="false">
+        <ListPreference
+            android:key="download_concurrency"
+            android:title="Concurrent chapter downloads"
+            android:entries="@array/download_concurrency_names"
+            android:entryValues="@array/download_concurrency_values"
+            android:defaultValue="1"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="App updates" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="automatic_app_updates"
+            android:title="Enable automatic updates"
+            android:summary="Checks the V9 GitHub release and notifies you when an APK update is available"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="automatic_app_update_frequency"
+            android:title="Update check frequency"
+            android:entries="@array/app_update_interval_names"
+            android:entryValues="@array/app_update_interval_values"
+            android:defaultValue="0"
+            app:useSimpleSummaryProvider="true"
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
 
@@ -87,6 +129,42 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Browse" app:iconSpaceReserved="false">
+        <ListPreference
+            android:key="global_search_concurrency"
+            android:title="Global Search concurrency"
+            android:summary="Maximum number of source searches running across the app"
+            android:entries="@array/global_search_concurrency_names"
+            android:entryValues="@array/global_search_concurrency_values"
+            android:defaultValue="5"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="global_search_request_timeout"
+            android:title="Global Search request timeout"
+            android:summary="Maximum wait for an individual source request before retrying"
+            android:entries="@array/global_search_request_timeout_names"
+            android:entryValues="@array/global_search_request_timeout_values"
+            android:defaultValue="12000"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="global_search_source_deadline"
+            android:title="Global Search source deadline"
+            android:summary="Maximum time allowed for one source after it begins searching"
+            android:entries="@array/global_search_source_deadline_names"
+            android:entryValues="@array/global_search_source_deadline_values"
+            android:defaultValue="90000"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="global_search_overall_deadline"
+            android:title="Global Search overall deadline"
+            android:summary="Maximum time allowed for the complete search"
+            android:entries="@array/global_search_overall_deadline_names"
+            android:entryValues="@array/global_search_overall_deadline_values"
+            android:defaultValue="300000"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
         <SwitchPreferenceCompat
             android:key="show_nsfw_ext"
             android:summary="Off by default. Also enables adult ratings on MangaDex."

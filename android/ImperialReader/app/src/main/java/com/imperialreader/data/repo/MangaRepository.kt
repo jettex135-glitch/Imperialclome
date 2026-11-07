@@ -1,6 +1,7 @@
 package com.imperialreader.data.repo
 
 import android.content.Context
+import android.util.Log
 import androidx.room.withTransaction
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
@@ -12,19 +13,24 @@ import com.imperialreader.data.source.CombinedSource
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.source.normalizeTitle
 import com.imperialreader.data.storage.LocalScanner
+import com.imperialreader.data.update.LibraryRefreshConcurrencyController
 import com.imperialreader.util.app
 import com.imperialreader.util.parseChapterNumber
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.TimeUnit
 
 class MangaRepository(private val ctx: Context) {
 
     private val db get() = ctx.app.db
+    private val automaticRefreshMutex = Mutex()
 
     /** Returns the stored row for a source entry, creating a (non-library) row if needed. */
     suspend fun getOrCreate(sourceId: String, s: SManga): MangaEntity {
@@ -84,35 +90,47 @@ class MangaRepository(private val ctx: Context) {
     }
 
     /** Refreshes only an entry's cover, leaving chapter state untouched. */
-    suspend fun refreshCover(manga: MangaEntity): Boolean {
-        if (manga.source == LOCAL_SOURCE_ID || BookSources.get(manga.source) != null) return false
-        val source = ctx.app.sources.get(manga.source)
-            ?: throw IOException("Source '${manga.source}' is not available")
-        val details = source.getMangaDetails(
-            SManga(
-                url = manga.url,
-                title = manga.title,
-                thumbnailUrl = manga.coverUrl,
-                author = manga.author,
-                artist = manga.artist,
-                description = manga.description,
-                genre = manga.genre,
-                status = manga.status
+    suspend fun refreshCover(manga: MangaEntity): Boolean = automaticRefreshMutex.withLock {
+        if (manga.source == LOCAL_SOURCE_ID || BookSources.get(manga.source) != null) {
+            false
+        } else {
+            val source = ctx.app.sources.get(manga.source)
+                ?: throw IOException("Source '${manga.source}' is not available")
+            val details = source.getMangaDetails(
+                SManga(
+                    url = manga.url,
+                    title = manga.title,
+                    thumbnailUrl = manga.coverUrl,
+                    author = manga.author,
+                    artist = manga.artist,
+                    description = manga.description,
+                    genre = manga.genre,
+                    status = manga.status
+                )
             )
-        )
-        val coverUrl = details.thumbnailUrl?.takeIf { it.isNotBlank() } ?: return false
-        if (coverUrl == manga.coverUrl) return false
-        db.mangaDao().update(manga.copy(coverUrl = coverUrl))
-        return true
+            val coverUrl = details.thumbnailUrl?.takeIf { it.isNotBlank() }
+            if (coverUrl == null || coverUrl == manga.coverUrl) false
+            else {
+                db.mangaDao().update(manga.copy(coverUrl = coverUrl))
+                true
+            }
+        }
     }
 
     /** Re-fetches details + chapter list from the source. Returns the number of NEW chapters. */
-    suspend fun refresh(manga: MangaEntity): Int {
+    suspend fun refresh(manga: MangaEntity): Int = refresh(manga, refreshController = null)
+
+    private suspend fun refresh(
+        manga: MangaEntity,
+        refreshController: LibraryRefreshConcurrencyController?
+    ): Int {
         if (manga.source == LOCAL_SOURCE_ID) return 0
         val bookSource = BookSources.get(manga.source)
         if (bookSource?.isWebNovel == true) {
             val item = BookSources.itemFor(manga) ?: throw IOException("Book entry is unavailable")
-            val details = bookSource.details(item)
+            val details = runRefreshOperation(refreshController, manga.source, "details") {
+                bookSource.details(item)
+            }
             val updatedManga = manga.copy(
                 author = details.author ?: manga.author,
                 artist = details.artist ?: manga.artist,
@@ -123,7 +141,9 @@ class MangaRepository(private val ctx: Context) {
                 lastUpdate = System.currentTimeMillis()
             )
             db.mangaDao().update(updatedManga)
-            val sourceChapters = bookSource.chapters(details)
+            val sourceChapters = runRefreshOperation(refreshController, manga.source, "chapters") {
+                bookSource.chapters(details)
+            }
             if (sourceChapters.isEmpty()) {
                 throw IOException("${bookSource.name} returned no chapters; the existing chapter list was kept")
             }
@@ -147,7 +167,13 @@ class MangaRepository(private val ctx: Context) {
             url = manga.url, title = manga.title, thumbnailUrl = manga.coverUrl, author = manga.author,
             artist = manga.artist, description = manga.description, genre = manga.genre, status = manga.status
         )
-        val details = source.getMangaDetails(input)
+        val details = if (refreshController != null && source is CombinedSource) {
+            source.getMangaDetailsForLibraryRefresh(input, refreshController)
+        } else {
+            runRefreshOperation(refreshController, manga.source, "details") {
+                source.getMangaDetails(input)
+            }
+        }
         db.mangaDao().update(
             manga.copy(
                 title = details.title.ifBlank { manga.title },
@@ -161,7 +187,13 @@ class MangaRepository(private val ctx: Context) {
                 lastUpdate = System.currentTimeMillis()
             )
         )
-        val chapters = source.getChapters(details)
+        val chapters = if (refreshController != null && source is CombinedSource) {
+            source.getChaptersForLibraryRefresh(details, refreshController)
+        } else {
+            runRefreshOperation(refreshController, manga.source, "chapters") {
+                source.getChapters(details)
+            }
+        }
         if (chapters.isEmpty()) {
             throw IOException("${source.name} returned no chapters; the existing chapter list was kept")
         }
@@ -215,21 +247,66 @@ class MangaRepository(private val ctx: Context) {
         return if (firstSync) 0 else toInsert.size
     }
 
-    /** Refreshes every library entry (4 at a time). Returns the total number of new chapters. */
-    suspend fun updateLibrary(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): Int = coroutineScope {
-        LocalScanner(ctx).scan()
-        val favorites = db.mangaDao().getFavorites().filter { it.source != LOCAL_SOURCE_ID }
-        val sem = Semaphore(4)
-        val done = AtomicInteger(0)
-        favorites.map { m ->
-            async {
-                sem.withPermit {
-                    val n = runCatching { refresh(m) }.getOrDefault(0)
-                    onProgress(done.incrementAndGet(), favorites.size)
-                    n
+    /** Refreshes every online library entry while limiting source requests across nested sources. */
+    suspend fun updateLibrary(
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onFailure: (manga: MangaEntity, error: Exception) -> Unit = { manga, error ->
+            Log.w(TAG, "Could not update '${manga.title}'", error)
+        }
+    ): Int = automaticRefreshMutex.withLock {
+        coroutineScope {
+            val totalStartedAt = System.nanoTime()
+            val favorites = db.mangaDao().getFavorites().filter { it.source != LOCAL_SOURCE_ID }
+            val sem = Semaphore(LibraryRefreshConcurrencyController.MAX_CONCURRENT_SOURCE_OPERATIONS)
+            val done = AtomicInteger(0)
+            val refreshStartedAt = System.nanoTime()
+            val newChapters = favorites.map { manga ->
+                async {
+                    sem.withPermit {
+                        val newChapters = try {
+                            refresh(manga, ctx.app.libraryRefreshConcurrency)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            onFailure(manga, e)
+                            0
+                        }
+                        onProgress(done.incrementAndGet(), favorites.size)
+                        newChapters
+                    }
                 }
-            }
-        }.awaitAll().sum()
+            }.awaitAll().sum()
+            Log.d(
+                TAG,
+                "Online library refresh completed in " +
+                    "${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - refreshStartedAt)}ms " +
+                    "(${done.get()}/${favorites.size} entries, $newChapters new chapters)"
+            )
+            val scanStartedAt = System.nanoTime()
+            val scannedLocalEntries = LocalScanner(ctx).scan()
+            Log.d(
+                TAG,
+                "Local scan completed in ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - scanStartedAt)}ms " +
+                    "($scannedLocalEntries entries)"
+            )
+            Log.d(
+                TAG,
+                "Library refresh completed in " +
+                    "${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - totalStartedAt)}ms"
+            )
+            newChapters
+        }
+    }
+
+    private suspend fun <T> runRefreshOperation(
+        refreshController: LibraryRefreshConcurrencyController?,
+        sourceId: String,
+        operation: String,
+        block: suspend () -> T
+    ): T = if (refreshController == null) {
+        block()
+    } else {
+        refreshController.withSourcePermit(sourceId, operation, block)
     }
 
     suspend fun recordHistory(chapterId: Long) {
@@ -243,4 +320,8 @@ class MangaRepository(private val ctx: Context) {
 
     private fun canonicalUrl(url: String): String =
         url.lowercase().substringAfter("://").removePrefix("www.").trimEnd('/')
+
+    private companion object {
+        const val TAG = "MangaRepository"
+    }
 }

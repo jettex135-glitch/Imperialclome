@@ -4,11 +4,16 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.data.network.await
 import com.imperialreader.util.parseChapterNumber
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
@@ -24,118 +29,244 @@ class MangaFireSource : HttpSource() {
     override val name = "MangaFire"
     override val lang = "en"
     override val baseUrl = "https://mangafire.to"
+    override val extraHeaders: Map<String, String>
+        get() = super.extraHeaders + mapOf("Accept-Language" to "en-US,en;q=0.9")
+
+    private val jsonHeaders = mapOf("Accept" to "application/json")
 
     override suspend fun getPopular(page: Int): MangasPage =
-        list("$baseUrl/filter?sort=most_viewed&language%5B%5D=en&page=${page.coerceAtLeast(1)}", page)
+        listTitles(page, order = "views_30d")
 
     override suspend fun getLatest(page: Int): MangasPage =
-        list("$baseUrl/filter?sort=recently_updated&language%5B%5D=en&page=${page.coerceAtLeast(1)}", page)
+        listTitles(page, order = "chapter_updated_at")
 
-    override suspend fun search(query: String, page: Int): MangasPage {
-        val pageNumber = page.coerceAtLeast(1)
-        val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name()).replace("+", "%20")
-        val vrf = MangaFireVrf.generate(query)
-        return list(
-            "$baseUrl/filter?keyword=$encodedQuery&vrf=$vrf&sort=most_relevance&language%5B%5D=en&page=$pageNumber",
-            pageNumber
-        )
-    }
+    override suspend fun search(query: String, page: Int): MangasPage =
+        listTitles(page, query = query.trim())
 
-    private suspend fun list(url: String, page: Int): MangasPage {
-        val doc = Jsoup.parse(getString(url), url)
-        val mangas = doc.select(".original .unit .inner, .unit .inner").mapNotNull { card ->
-            val link = card.selectFirst(".info > a[href], .info a[href], a.name[href], a[href*=/manga/]")
+    private suspend fun listTitles(page: Int, order: String? = null, query: String? = null): MangasPage {
+        if (page < 1) return MangasPage(emptyList(), false)
+        val params = buildList {
+            order?.let { add("order[$it]" to "desc") }
+            query?.takeIf { it.isNotBlank() }?.let { add("keyword" to it) }
+            add("page" to page.toString())
+            add("limit" to "50")
+        }
+        val response = JSONObject(getApi("/api/titles", params))
+        val entries = response.optJSONArray("items")
+            ?: throw IOException("MangaFire returned no title list")
+        val mangas = (0 until entries.length()).mapNotNull { index ->
+            val item = entries.optJSONObject(index) ?: return@mapNotNull null
+            val hid = item.optString("hid").takeIf { it.matches(Regex("[A-Za-z0-9]+")) }
                 ?: return@mapNotNull null
-            parseManga(link, card.selectFirst("img"))
-        }.ifEmpty {
-            doc.select("a[href*=/manga/]").mapNotNull { link ->
-                parseManga(link, link.selectFirst("img") ?: link.parent()?.selectFirst("img"))
-            }
+            val title = item.optString("title").trim().ifBlank { return@mapNotNull null }
+            val slug = item.optString("slug").trim().takeIf { it.isNotBlank() }
+            val poster = item.optJSONObject("poster")
+            SManga(
+                url = titleUrl(hid, slug),
+                title = title,
+                thumbnailUrl = poster?.optString("large")?.takeIf { it.startsWith("https://") }
+                    ?: poster?.optString("medium")?.takeIf { it.startsWith("https://") }
+                    ?: poster?.optString("small")?.takeIf { it.startsWith("https://") }
+            )
         }.distinctBy { it.url }
-        if (mangas.isEmpty() && page <= 1) throw IOException("MangaFire returned no readable titles")
-        val hasNext = doc.selectFirst(".page-item.active + .page-item .page-link, a[rel=next]") != null
-        return MangasPage(mangas, hasNext && mangas.isNotEmpty())
-    }
-
-    private fun parseManga(link: Element, image: Element?): SManga? {
-        val url = link.absUrl("href").ifBlank { absoluteUrl(link.attr("href")) }
-        if (url.isBlank() || !url.contains("/manga/")) return null
-        val title = link.ownText().trim().ifBlank { link.text().trim() }
-            .ifBlank { image?.attr("alt")?.trim().orEmpty() }
-        if (title.isBlank()) return null
-        return SManga(url = url, title = title, thumbnailUrl = lazyImage(image))
+        val hasNext = response.optJSONObject("meta")?.optBoolean("hasNext") ?: (entries.length() >= 50)
+        return MangasPage(mangas, hasNext)
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
-        val doc = Jsoup.parse(getString(manga.url), manga.url)
-        manga.title = doc.selectFirst(".info > h1")?.ownText()?.trim()?.ifBlank { null } ?: manga.title
-        manga.thumbnailUrl = lazyImage(doc.selectFirst("div.manga-detail div.poster img")) ?: manga.thumbnailUrl
-        manga.description = doc.selectFirst("#synopsis .modal-content, .description")?.text()?.trim()
-            ?.ifBlank { null } ?: manga.description
-        manga.author = doc.select("div.meta a[href*=/author/]").joinToString { it.ownText().trim() }
+        val hid = mangaId(manga.url)
+        val response = JSONObject(getApi("/api/titles/$hid"))
+        val details = response.optJSONObject("data") ?: throw IOException("MangaFire returned no title details")
+        val poster = details.optJSONObject("poster")
+        manga.url = titleUrl(hid, details.optString("slug").takeIf { it.isNotBlank() })
+        manga.title = details.optString("title").ifBlank { manga.title }
+        manga.thumbnailUrl = poster?.optString("large")?.takeIf { it.startsWith("https://") }
+            ?: poster?.optString("medium")?.takeIf { it.startsWith("https://") }
+            ?: poster?.optString("small")?.takeIf { it.startsWith("https://") }
+            ?: manga.thumbnailUrl
+        manga.description = details.optString("synopsisHtml").takeIf { it.isNotBlank() }
+            ?.let { Jsoup.parseBodyFragment(it).text() } ?: manga.description
+        manga.author = entityTitles(details.optJSONArray("authors")).joinToString(", ")
             .ifBlank { manga.author.orEmpty() }
-        manga.genre = doc.select("div.meta a[href*=/genre/]").joinToString { it.ownText().trim() }
-            .ifBlank { manga.genre.orEmpty() }
-        manga.status = statusFromText(doc.selectFirst(".info > p")?.ownText().orEmpty())
+        manga.artist = entityTitles(details.optJSONArray("artists")).joinToString(", ")
+            .ifBlank { manga.artist.orEmpty() }
+        manga.genre = buildList {
+            details.optString("type").takeIf { it.isNotBlank() }?.let { add(it.replaceFirstChar(Char::uppercase)) }
+            addAll(entityTitles(details.optJSONArray("genres")))
+            addAll(entityTitles(details.optJSONArray("themes")))
+        }.distinct().joinToString(", ").ifBlank { manga.genre.orEmpty() }
+        manga.status = when (details.optString("status").lowercase()) {
+            "releasing" -> 1
+            "finished" -> 2
+            "on_hiatus", "discontinued" -> 3
+            else -> 0
+        }
         return manga
     }
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
-        val doc = Jsoup.parse(getString(manga.url), manga.url)
-        val mangaId = mangaId(manga.url)
-        val chapterType = doc.select(".chapvol-tab > a").firstOrNull { it.attr("data-name") == "chapter" }
-            ?.attr("data-name")
-            ?: throw IOException("MangaFire has no chapter list for this title")
-        val language = doc.select(".m-list .tab-content[data-name=chapter] .list-menu .dropdown-item")
-            .firstOrNull { it.attr("data-code").equals(lang, ignoreCase = true) }
-            ?: throw IOException("MangaFire has no English chapters for this title")
-        val langCode = language.attr("data-code").lowercase(Locale.ROOT)
-        val listingVrf = MangaFireVrf.generate("$mangaId@$chapterType@$langCode")
-        val listJson = JSONObject(getString("$baseUrl/ajax/read/$mangaId/$chapterType/$langCode?vrf=$listingVrf"))
-        val chapterLinks = Jsoup.parseBodyFragment(listJson.getJSONObject("result").getString("html"))
-            .select("ul li a")
-        if (chapterLinks.isEmpty()) throw IOException("MangaFire returned an empty chapter list")
-
-        val dateJson = JSONObject(getString("$baseUrl/ajax/manga/$mangaId/$chapterType/$langCode"))
-        val dateLinks = Jsoup.parseBodyFragment(dateJson.getString("result")).select("ul li a")
-        val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.ENGLISH)
-        return chapterLinks.mapIndexedNotNull { index, link ->
-            val number = link.attr("data-number").toFloatOrNull() ?: return@mapIndexedNotNull null
-            val chapterId = link.attr("data-id").ifBlank { return@mapIndexedNotNull null }
-            val label = link.attr("title").trim().ifBlank {
-                link.text().trim().ifBlank { "Chapter ${link.attr("data-number")}" }
-            }
-            val date = dateLinks.getOrNull(index)?.select("span")?.getOrNull(1)?.ownText().orEmpty()
-            val pageVrf = MangaFireVrf.generate("$chapterType@$chapterId")
-            SChapter(
-                url = "$baseUrl/ajax/read/$chapterType/$chapterId?vrf=$pageVrf",
-                name = label,
-                dateUpload = runCatching { dateFormat.parse(date)?.time ?: 0L }.getOrDefault(0L),
-                chapterNumber = number
+        val hid = mangaId(manga.url)
+        val chapters = mutableListOf<SChapter>()
+        var page = 1
+        var lastPage = 1
+        while (page <= lastPage.coerceAtMost(MAX_CHAPTER_PAGES)) {
+            val params = listOf(
+                "language" to lang,
+                "sort" to "number",
+                "order" to "desc",
+                "page" to page.toString(),
+                "limit" to "200"
             )
-        }.also {
-            if (it.isEmpty()) throw IOException("MangaFire returned no valid chapters")
-        }.sortedByDescending { it.chapterNumber }
+            val response = JSONObject(getApi("/api/titles/$hid/chapters", params))
+            val items = response.optJSONArray("items") ?: JSONArray()
+            lastPage = response.optJSONObject("meta")?.optInt("lastPage", 1) ?: 1
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                val id = item.optInt("id", -1).takeIf { it > 0 } ?: continue
+                val number = item.optDouble("number", -1.0).toFloat()
+                if (number < 0f) continue
+                val numberText = number.toString().removeSuffix(".0")
+                val name = item.optString("name").ifBlank { "Chapter $numberText" }
+                chapters += SChapter(
+                    url = "${manga.url.trimEnd('/')}/$id-chapter-$numberText-${enc(lang)}",
+                    name = name,
+                    dateUpload = item.optLong("createdAt", 0L) * 1000L,
+                    chapterNumber = number,
+                    scanlator = item.optString("type").ifBlank { null }
+                )
+            }
+            if (items.length() == 0) break
+            page++
+        }
+        if (page > MAX_CHAPTER_PAGES) throw IOException("MangaFire chapter list exceeded the page limit")
+        if (chapters.isEmpty()) throw IOException("MangaFire returned no chapter entries")
+        return chapters.distinctBy { it.url }.sortedByDescending { it.chapterNumber }
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
-        val result = JSONObject(getString(chapter.url)).getJSONObject("result")
-        val images = result.getJSONArray("images")
-        val pages = (0 until images.length()).mapNotNull { index ->
-            val image = images.getJSONArray(index)
-            val url = image.optString(0).takeIf { it.startsWith("https://") || it.startsWith("http://") }
-                ?: return@mapNotNull null
-            val offset = image.optInt(2)
-            if (offset > 0) "$url#scrambled_$offset" else url
-        }
+        val id = chapterId(chapter.url)
+        val data = JSONObject(getApi("/api/chapters/$id")).optJSONObject("data")
+            ?: throw IOException("MangaFire returned no chapter page data")
+        val entries = data.optJSONArray("pages") ?: JSONArray()
+        val pages = (0 until entries.length()).mapNotNull { index ->
+            val page = entries.optJSONObject(index) ?: return@mapNotNull null
+            page.optString("url").takeIf { it.startsWith("https://") }
+        }.distinct()
         if (pages.isEmpty()) throw IOException("MangaFire returned no readable pages for this chapter")
         return pages
     }
 
     private fun mangaId(url: String): String {
-        val slug = runCatching { URI(url).path.substringAfterLast('/') }.getOrNull().orEmpty()
-        return slug.substringAfterLast('.').takeIf { it.isNotBlank() && it != slug }
-            ?: throw IOException("MangaFire returned an invalid manga address")
+        val segment = runCatching { URI(url).path.trimEnd('/').substringAfterLast('/') }.getOrNull().orEmpty()
+        val id = when {
+            '.' in segment -> segment.substringAfterLast('.')
+            '-' in segment -> segment.substringBefore('-')
+            else -> segment
+        }
+        return id.takeIf { it.matches(Regex("[A-Za-z0-9]+")) }
+            ?: throw IOException("MangaFire returned an invalid title address")
+    }
+
+    private fun chapterId(url: String): String {
+        val segment = runCatching { URI(url).path.trimEnd('/').substringAfterLast('/') }.getOrNull().orEmpty()
+        val id = segment.substringBefore('-')
+        return id.takeIf { it.matches(Regex("\\d+")) }
+            ?: throw IOException("MangaFire returned an invalid chapter address")
+    }
+
+    private fun titleUrl(hid: String, slug: String?): String =
+        "$baseUrl/title/$hid${slug?.takeIf { it.isNotBlank() }?.let { "-$it" }.orEmpty()}"
+
+    private fun entityTitles(array: JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optJSONObject(index)?.optString("title")?.trim()?.takeIf { it.isNotBlank() }
+        }.distinct()
+    }
+
+    private suspend fun getApi(path: String, query: List<Pair<String, String>> = emptyList()): String =
+        withContext(Dispatchers.IO) {
+            val builder = "$baseUrl$path".toHttpUrl().newBuilder()
+            query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
+            val unsignedUrl = builder.build()
+            val parameters = unsignedUrl.queryParameterNames
+                .flatMap { key -> unsignedUrl.queryParameterValues(key).map { key to it } }
+                .sortedBy { it.first }
+            val signatureInput = buildString {
+                append(unsignedUrl.encodedPath.removePrefix("/api"))
+                if (parameters.isNotEmpty()) {
+                    append('?')
+                    var previousArrayKey = ""
+                    var arrayIndex = 0
+                    append(parameters.joinToString("&") { (key, value) ->
+                        val signedKey = if (key.endsWith("[]")) {
+                            if (previousArrayKey != key) arrayIndex = 0
+                            previousArrayKey = key
+                            key.removeSuffix("[]") + "[${arrayIndex++}]"
+                        } else key
+                        "$signedKey=$value"
+                    })
+                }
+            }
+            val signedUrl = unsignedUrl.newBuilder()
+                .addQueryParameter("vrf", MangaFireApiSigner.sign(signatureInput))
+                .build()
+            val request = Request.Builder().url(signedUrl).apply {
+                extraHeaders.forEach { (key, value) -> header(key, value) }
+                jsonHeaders.forEach { (key, value) -> header(key, value) }
+            }.build()
+            client.await(request).use { response ->
+                val body = response.body?.string().orEmpty()
+                val captchaRequired = response.code == 403 &&
+                    runCatching { JSONObject(body).optString("error") == "captcha_required" }.getOrDefault(false)
+                val cloudflarePage = Regex(
+                    "(?is)<title[^>]*>\\s*(?:just a moment|attention required|checking your browser)"
+                ).containsMatchIn(body)
+                if (captchaRequired || response.header("cf-mitigated")?.equals("challenge", true) == true || cloudflarePage) {
+                    throw CloudflareException(signedUrl.toString())
+                }
+                if (!response.isSuccessful) throw HttpStatusException(response.code, signedUrl.toString())
+                if (body.isBlank()) throw IOException("MangaFire returned an empty API response")
+                body
+            }
+        }
+
+    private companion object {
+        const val MAX_CHAPTER_PAGES = 100
+    }
+}
+
+private object MangaFireApiSigner {
+    private val stages = listOf(
+        Triple(
+            Base64.getDecoder().decode("yINlmUNho8VYJT+ibTIP+9ESiULpVEtMOoD6U6lRE0R/xwXo/Xp9NrUgC4cw/Lmo33vUyjUE40kUoEWIr/fxfNNcq2s79ShQ5NhNrFnJ4hXPwOu/SuXzIbuTQKGFvfm08E9jvCfqAtoDqvQq3dVWPQFmJjgvkISBeXY3BgANR+yVnjGbcxZ47d6kLNfZPIayTq3/YGySb1KuVZodWp/WGNAO5pfMcpaK53Hhs0allBszaMaxuouOwdxbwgxIw6YunSsXjI05Yi0j9j4eHKfSXR8Ifo/Od+8iamRfCXTyvm7NGRGYdcQ0ywcK/u6RXhrbcCm4t2eCtrDgQVecJGkQ+A=="),
+            Base64.getDecoder().decode("0Ec58JOY3uBzJK9m3zqIOpdlF7UFiax9DmA="),
+            0x5A
+        ),
+        Triple(
+            Base64.getDecoder().decode("IUFltCxD3Oc2cwCgkJffthaOg9cgPUb0LgW6H/VtfcF0kc5F25t+aWj6JH9VOhOaY0rAFdUxlDnl5BLNvwEJvQtP5qcw7vdb/K+chnbwnspSHT8mz5lqwz41TezG0hkO06FTjJZhsyNuFLDpD2ZZxQj/QIRcF90zpmQ7Byu483WsQqUE0C342HL+JXngRB6fRzxRyVTaKu83h7UYTJ0QMt6ixFh6S3F8gqkKwrGTL3jHNBsD45UnifK8+RGtishQV2K3rujLKEkiZxpr2dYcudFW4oFsDKhad3CLBvuyTqsCo4B7mL5IKQ1vXo/MOOvq1I1d8ar9X6Ttu5KF4fZgiA=="),
+            Base64.getDecoder().decode("AAdjb1iPY8CiDmq9H34tKTBF8a3oDQ=="),
+            0x35
+        ),
+        Triple(
+            Base64.getDecoder().decode("NQHlu1/wVO5EmkwQymF810qqY2xG1k2obcas4Z9mCsPEIFl9pRIjFxbJ7ybMHbBckT5Ton85E0FOeHezbh/mjlEYpmpnlXOS8dgrqeq2KfxImTh1YK9y0PeMNhzA1OQzSY9brYOJq/l2QnE/hwOeZIhPixVSKIUlDb5vLcH6RWKxkIEMuP0bDwIqQ71AJJaEaMJL7A6YtyIwoRT+L5v4aZzodN/0+3nOGsfblFjgxSfPzVDjNFeNl5P26+kEC/8AHgdrpAbt3hHz3HrRN1Y6e+JHgF7ncFWnoF0y3THL1S71WgWGCa6KtSzTCCG58n68nTyj2T3Sshk7utqCtMi/ZQ=="),
+            Base64.getDecoder().decode("DELOJgPsVaCcblDtTGMdHzM="),
+            0xBA
+        )
+    )
+
+    fun sign(value: String): String {
+        var bytes = value.toByteArray(Charsets.UTF_8)
+        for ((table, key, initial) in stages) {
+            val output = ByteArray(bytes.size)
+            var previous = initial
+            for (index in bytes.indices) {
+                previous = table[(bytes[index].toInt() xor key[index % key.size].toInt() xor previous) and 0xff].toInt() and 0xff
+                output[index] = previous.toByte()
+            }
+            bytes = output
+        }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     }
 }
 

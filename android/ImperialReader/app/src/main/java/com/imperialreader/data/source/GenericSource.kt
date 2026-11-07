@@ -3,6 +3,10 @@ package com.imperialreader.data.source
 import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.util.parseChapterNumber
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withPermit
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -27,9 +31,9 @@ class GenericSource(
     @Volatile private var listPattern: String? = null
     @Volatile private var latestPattern: String? = null
     @Volatile private var searchPattern: String? = null
+    @Volatile private var genrePattern: String? = null
 
     private val novelList = listOf(
-        "/all-series/?paged={p}", "/all-series/page/{p}/",
         "/popular?page={p}", "/most-popular?page={p}", "/novel-list?page={p}", "/novels?page={p}", "/novel?page={p}",
         "/list/best-rated?page={p}", "/ranking?page={p}", "/library?page={p}"
     )
@@ -121,10 +125,11 @@ class GenericSource(
             val path = runCatching { URI(href).path }.getOrNull().orEmpty().trim('/')
             if (path.isBlank() || path.count { it == '/' } > 2 || badPath.containsMatchIn(path)) return@mapNotNull null
             if (a.parents().any { it.tagName() in setOf("nav", "header", "footer") }) return@mapNotNull null
-            val img = a.selectFirst("img") ?: return@mapNotNull null
-            val title = listOf(a.attr("title"), img.attr("alt"), a.text(), a.parent()?.selectFirst("h1,h2,h3,h4,.title")?.text().orEmpty())
+            val img = a.selectFirst("img")
+            if (img == null && !novel) return@mapNotNull null
+            val title = listOf(a.attr("title"), img?.attr("alt").orEmpty(), a.text(), a.parent()?.selectFirst("h1,h2,h3,h4,.title")?.text().orEmpty())
                 .map { it.trim() }.firstOrNull { it.length >= 2 } ?: return@mapNotNull null
-            Card(path.substringBefore('/'), SManga(url = href, title = title.take(150), thumbnailUrl = lazyImage(img)))
+            Card(path.substringBefore('/'), SManga(url = href, title = title.take(150), thumbnailUrl = img?.let(::lazyImage)))
         }
         val dominant = all.groupBy { it.segment }.maxByOrNull { it.value.size }?.key ?: return emptyList()
         return all.filter { it.segment == dominant }.map { it.manga }.distinctBy { it.url }
@@ -188,6 +193,118 @@ class GenericSource(
         throw last ?: IOException("Search failed on this site")
     }
 
+    override suspend fun searchByAuthor(query: String, page: Int): MangasPage {
+        val slug = query.trim().lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), "-").trim('-')
+        if (slug.isBlank()) return MangasPage(emptyList(), false)
+        val patterns = listOf(
+            "/search?author={q}&page={p}",
+            "/search?artist={q}&page={p}",
+            "/search?keyword={q}&author={q}&page={p}",
+            "/author/{q}/page/{p}",
+            "/author/{q}?page={p}",
+            "/artist/{q}/page/{p}",
+            "/artist/{q}?page={p}"
+        )
+        for (pattern in patterns) {
+            try {
+                val url = baseUrl.trimEnd('/') + pattern
+                    .replace("{q}", enc(slug))
+                    .replace("{p}", page.toString())
+                val candidates = parseCards(doc(url))
+                if (candidates.isEmpty()) continue
+                val limiter = kotlinx.coroutines.sync.Semaphore(4)
+                val matches = coroutineScope {
+                    candidates.map { candidate ->
+                        async {
+                            try {
+                                limiter.withPermit {
+                                    getMangaDetails(candidate).takeIf { manga ->
+                                        listOfNotNull(manga.author, manga.artist)
+                                            .any { it.contains(query, ignoreCase = true) }
+                                    }
+                                }
+                            } catch (e: CloudflareException) {
+                                throw e
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                    }.awaitAll().filterNotNull()
+                }
+                if (matches.isNotEmpty()) return MangasPage(matches, candidates.size >= 20)
+            } catch (e: CloudflareException) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                continue
+            }
+        }
+        return super<HttpSource>.searchByAuthor(query, page)
+    }
+
+    override suspend fun searchByGenre(query: String, page: Int): MangasPage {
+        val slug = query.trim().lowercase().replace(Regex("[^\\p{L}\\p{N}]+"), "-").trim('-')
+        if (slug.isBlank()) return MangasPage(emptyList(), false)
+
+        val known = genrePattern
+        if (known != null) {
+            val result = genreCards(query, slug, page, known)
+            if (result.mangas.isNotEmpty() || page > 1) return result
+            genrePattern = null
+        }
+
+        val candidates = listOf(
+            "/genre/{g}/page/{p}", "/genres/{g}/page/{p}",
+            "/tag/{g}/page/{p}", "/tags/{g}/page/{p}",
+            "/genre/{g}?page={p}", "/tag/{g}?page={p}"
+        )
+        for (pattern in candidates) {
+            try {
+                val result = genreCards(query, slug, 1, pattern)
+                if (result.mangas.isNotEmpty()) {
+                    genrePattern = pattern
+                    return if (page == 1) result else genreCards(query, slug, page, pattern)
+                }
+            } catch (e: CloudflareException) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HttpStatusException) {
+                if (e.code != 404) throw e
+            }
+        }
+        return super.searchByGenre(query, page)
+    }
+
+    private suspend fun genreCards(query: String, slug: String, page: Int, pattern: String): MangasPage {
+        val url = baseUrl.trimEnd('/') + pattern
+            .replace("{g}", enc(slug))
+            .replace("{p}", page.toString())
+        val candidates = parseCards(doc(url))
+        val limiter = kotlinx.coroutines.sync.Semaphore(4)
+        val matches = coroutineScope {
+            candidates.map { candidate ->
+                async {
+                    try {
+                        limiter.withPermit {
+                            getMangaDetails(candidate).takeIf {
+                                normalizeTitle(it.genre.orEmpty()).contains(normalizeTitle(query))
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+        return MangasPage(matches, pattern.contains("{p}") && matches.isNotEmpty())
+    }
+
     // ------------------------------------------------------------------ details & chapters
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
@@ -206,26 +323,33 @@ class GenericSource(
         val detailAreas = if (selectedAreas.isEmpty()) d.select("main, article, body") else selectedAreas
         val genreLinks = detailAreas.select(
             ".genres a, .genre a, .tags a, .tag a, .manga-genres a, .series-genres a, " +
-                ".genres-content a, .mgen a, .seriestugenre a, [itemprop=genre], [rel=tag], " +
-                "[class*=genre] a, [class*=tag] a, a[href*=genre], a[href*=tag]"
+                ".genres-content a, .mgen a, .seriestugenre a, [itemprop=genre]"
         ) + d.select("[itemprop=genre]")
-        val labeledGenres = detailAreas.select("li, p, div, span, td, tr").filter { element ->
-            val text = element.ownText().ifBlank { element.text() }.trim()
-            text.startsWith("Genre", true) || text.startsWith("Tag", true)
-        }.flatMap { it.select("a, [itemprop=genre]") }
-        val genres = (genreLinks + labeledGenres)
+        val genreNames = (genreLinks + detailAreas.select(
+            ".genres, .genre, .tags, .tag, [class*=genre], [class*=tag], [itemprop=genre]"
+        ).flatMap { it.select("a, [itemprop=genre]") })
             .filter { link -> link.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
-            .map { it.text().trim().trim(',') }
-            .filter { it.isNotBlank() && it.length < 50 }.distinct().take(20)
-            .joinToString(", ")
+            .map { link -> link.attr("content").ifBlank { link.text() }.trim().trim(',', ':') }
+            .filter { it.isNotBlank() && it.length < 50 }
+            .toMutableList()
+        detailAreas.select("li, p, div, span, td, tr").forEach { element ->
+            if (element.parents().any { it.tagName() in setOf("nav", "header", "footer") }) return@forEach
+            val text = element.ownText().trim()
+            val taggedValues = Regex("""(?i)^(?:genres?|tags?)\s*:\s*(.+)$""")
+                .matchEntire(text)?.groupValues?.get(1) ?: return@forEach
+            genreNames += taggedValues.split(Regex("""\s*[,;|•]\s*"""))
+                .map { it.trim().trim('.', ':') }
+                .filter { it.isNotBlank() && it.length < 50 }
+        }
+            genreNames += extractGenreTags(d)
+        manga.genre = genreNames.distinct().take(20).joinToString(", ").ifBlank { null }
         fun labeled(label: String): String? = detailAreas.select("li, p, div, span, td, tr").asSequence()
             .filter { item -> item.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
             .map { it.ownText().ifBlank { it.text() }.trim() }
             .firstOrNull { it.length < 140 && it.startsWith(label, ignoreCase = true) && it.length > label.length }
             ?.substring(label.length)?.trim(' ', ':', '-')?.ifBlank { null }
-        manga.genre = genres.ifBlank { null } ?: manga.genre
-        manga.author = labeled("Author") ?: labeled("Authors") ?: labeled("Writer") ?: manga.author
-        manga.artist = labeled("Artist") ?: labeled("Artists") ?: labeled("Illustrator") ?: manga.artist
+        manga.author = labeled("Author") ?: labeled("Authors")
+        manga.artist = labeled("Artist")
         manga.status = statusFromText(labeled("Status").orEmpty())
         return manga
     }
@@ -254,13 +378,16 @@ class GenericSource(
         }
 
         var d = doc(manga.url)
+        if (novel) {
+            val chapterIndexUrl = novelChapterIndexUrl(d, site, mangaPath)
+            if (chapterIndexUrl != null) d = doc(chapterIndexUrl)
+        }
         collect(d)
         if (novel) {
             val visited = mutableSetOf(d.location())
             var pages = 1
             while (true) {
-                val next = d.selectFirst("a[rel=next], ul.pagination a:matchesOwn(^(Next|›|»|>)\$), a.next")
-                    ?.absUrl("href")?.takeIf { it.isNotBlank() && it != d.location() } ?: break
+                val next = nextNovelChapterPage(d, site) ?: break
                 if (host(next) != site) throw IOException("Novel chapter pagination left the source site")
                 if (!visited.add(next)) throw IOException("Novel chapter pagination contains a loop")
                 if (pages >= MAX_NOVEL_CHAPTER_PAGES) {
@@ -277,16 +404,153 @@ class GenericSource(
         return list.filter { it.chapterNumber >= 0f }.sortedByDescending { it.chapterNumber } + list.filter { it.chapterNumber < 0f }
     }
 
+    private fun novelChapterIndexUrl(doc: Document, site: String?, mangaPath: String): String? =
+        doc.select("a[href]").asSequence()
+            .mapNotNull { anchor ->
+                val url = anchor.absUrl("href")
+                val uri = runCatching { URI(url) }.getOrNull() ?: return@mapNotNull null
+                val path = uri.path.orEmpty().trimEnd('/')
+                if (host(url) != site || path == mangaPath) return@mapNotNull null
+                val label = "${anchor.text()} ${anchor.attr("title")} ${anchor.attr("aria-label")}"
+                val chapterIndexPath = path.contains(Regex("""(?i)/(?:all[-_]?chapters?|chapter[-_]?list)(?:/|$)"""))
+                val chapterIndexLabel = label.contains(Regex("""(?i)\b(?:all|full|view)\s+chapters?\b|\bchapter\s+list\b"""))
+                if (chapterIndexPath || chapterIndexLabel) url else null
+            }
+            .firstOrNull()
+
+    private fun nextNovelChapterPage(doc: Document, site: String?): String? {
+        val currentUrl = doc.location()
+        val current = runCatching { URI(currentUrl) }.getOrNull() ?: return null
+        val identity = chapterPageIdentity(current) ?: return null
+        val currentPage = paginationNumber(currentUrl) ?: 1
+        return doc.select("a[href]").asSequence()
+            .mapNotNull { anchor ->
+                val uri = runCatching { URI(anchor.absUrl("href")) }.getOrNull() ?: return@mapNotNull null
+                if (host(uri.toString()) != site || chapterPageIdentity(uri) != identity) return@mapNotNull null
+                if (!isPaginationLink(anchor, uri)) return@mapNotNull null
+                val number = paginationNumber(uri.toString()) ?: return@mapNotNull null
+                if (number <= currentPage) return@mapNotNull null
+                number to uri.toString()
+            }
+            .minByOrNull { it.first }?.second
+    }
+
+    private fun paginationNumber(url: String): Int? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val query = uri.rawQuery.orEmpty().split('&').associate {
+            it.substringBefore('=').lowercase() to it.substringAfter('=', "").toIntOrNull()
+        }
+        listOf(
+            "page", "paged", "p", "page_num", "page_no", "pageno", "pg", "cpage", "chapter_page",
+            "start", "offset", "limitstart", "cstart"
+        )
+            .firstNotNullOfOrNull { query[it] }?.let { return it }
+        return Regex("""(?:^|/)(?:page/|page-)(\d+)(?:/|$)""")
+            .find(uri.path.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+    }
+
     /** Readable HTML of a novel chapter: the container with the most paragraph text. */
     suspend fun chapterText(url: String): String {
-        val d = doc(url)
-        d.select("script, style, noscript, iframe, nav, header, footer, aside, form, .ads, .ad, [class*=advert], [id*=advert]").remove()
-        val best = d.select("div, article, section, main").maxByOrNull { el ->
-            el.children().asSequence().filter { it.tagName() == "p" }.sumOf { it.text().length }
+        val current = runCatching { URI(url) }.getOrNull()
+            ?: throw IOException("Invalid novel chapter address")
+        val site = current.host?.removePrefix("www.")?.lowercase()
+            ?: throw IOException("Invalid novel chapter address")
+        val visited = mutableSetOf<String>()
+        val pages = mutableListOf<String>()
+        var nextUrl: String? = url
+        var pageCount = 0
+        while (nextUrl != null) {
+            if (host(nextUrl) != site) throw IOException("Novel chapter pagination left the source site")
+            if (!visited.add(nextUrl)) throw IOException("Novel chapter pagination contains a loop")
+            if (++pageCount > MAX_NOVEL_TEXT_PAGES) {
+                throw IOException("Novel chapter exceeds the safe limit of $MAX_NOVEL_TEXT_PAGES pages")
+            }
+            val d = doc(nextUrl)
+            val next = nextNovelTextPage(d, nextUrl)
+            d.select("script, style, noscript, iframe, nav, header, footer, aside, form, .ads, .ad, [class*=advert], [id*=advert]").remove()
+            val best = d.select("div, article, section, main").maxByOrNull { el ->
+                el.children().asSequence().filter { it.tagName() == "p" }.sumOf { it.text().length }
+            } ?: throw IOException("Couldn't find the chapter text on this page")
+            if (best.select("p").size < 2 || best.text().isBlank()) {
+                throw IOException("Couldn't find readable chapter text on this page")
+            }
+            pages += best.html()
+            nextUrl = next
         }
-        val html = best?.html().orEmpty()
-        if (best == null || best.select("p").size < 2) throw IOException("Couldn't find the chapter text on this page")
-        return html
+        if (pages.isEmpty()) throw IOException("The source returned no readable chapter pages")
+        return pages.joinToString("\n")
+    }
+
+    private fun nextNovelTextPage(doc: Document, currentUrl: String): String? {
+        val current = runCatching { URI(currentUrl) }.getOrNull() ?: return null
+        val currentIdentity = chapterPageIdentity(current) ?: return null
+        val currentNumber = chapterPageNumber(current) ?: 1
+        val candidates = doc.select("a[href]").asSequence()
+            .mapNotNull { anchor ->
+                val uri = runCatching { URI(anchor.absUrl("href")) }.getOrNull() ?: return@mapNotNull null
+                anchor to uri
+            }
+            .filter { (anchor, uri) ->
+                uri.host?.removePrefix("www.")?.equals(current.host?.removePrefix("www."), true) == true &&
+                    chapterPageIdentity(uri) == currentIdentity &&
+                    (chapterPageNumber(uri) ?: 1) > currentNumber &&
+                    isPaginationLink(anchor, uri)
+            }
+            .map { it.second }
+            .distinctBy { it.toString() }
+            .minByOrNull { chapterPageNumber(it) ?: Int.MAX_VALUE }
+        return candidates?.toString()
+    }
+
+    private fun isPaginationLink(anchor: Element, uri: URI): Boolean {
+        if (uri.rawQuery.orEmpty().split('&').none {
+                it.substringBefore('=').equals("p", ignoreCase = true)
+            }) return true
+        val label = "${anchor.text()} ${anchor.attr("aria-label")} ${anchor.className()}"
+        return anchor.attr("rel").contains("next", ignoreCase = true) ||
+            anchor.hasClass("next") || anchor.hasClass("next_page") || anchor.hasClass("page-numbers") ||
+            label.contains("next", ignoreCase = true) ||
+            anchor.parents().any {
+                it.hasClass("pagination") || it.hasClass("pages") ||
+                    it.hasClass("chapter-pagination") || it.hasClass("page-links")
+            } ||
+            anchor.parents().any {
+                it.tagName() == "nav" && it.attr("aria-label").contains("pagination", ignoreCase = true)
+            }
+    }
+
+    private fun chapterPageIdentity(uri: URI): String? {
+        val path = uri.path.orEmpty().trimEnd('/')
+        if (path.isBlank()) return null
+        val cleanPath = path.replace(Regex("""(?i)/(?:pages?/|page-)\d+$"""), "")
+        val query = uri.rawQuery.orEmpty().split('&')
+            .filterNot {
+                it.substringBefore('=').lowercase() in
+                    setOf(
+                        "page", "paged", "p", "page_num", "page_no", "pageno", "pg", "cpage", "chapter_page",
+                        "start", "offset", "limitstart", "cstart"
+                    )
+            }
+            .sorted()
+            .joinToString("&")
+        return "${uri.host?.removePrefix("www.")?.lowercase()}:$cleanPath?$query"
+    }
+
+    private fun chapterPageNumber(uri: URI): Int? {
+        val query = uri.rawQuery.orEmpty().split('&').mapNotNull { pair ->
+            val key = pair.substringBefore('=').lowercase()
+            val value = pair.substringAfter('=', "")
+            if (key in setOf(
+                    "page", "paged", "p", "page_num", "page_no", "pageno", "pg", "cpage", "chapter_page",
+                    "start", "offset", "limitstart", "cstart"
+                )
+            ) {
+                value.toIntOrNull()
+            } else null
+        }.firstOrNull()
+        if (query != null) return query
+        return Regex("""(?i)/(?:pages?/|page-)(\d+)/?$""")
+            .find(uri.path.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
     }
 
     // ------------------------------------------------------------------ pages
@@ -316,11 +580,11 @@ class GenericSource(
             .map { it.value.replace("\\/", "/") }.filter { !bad.containsMatchIn(it) }.toList()
         val folder = urls.groupBy { it.substringBeforeLast('/') }.maxByOrNull { it.value.size }?.value.orEmpty()
         if (folder.size >= 2) return folder.distinct()
-        if (best.isEmpty()) throw IOException("No reader images found on this chapter")
-        return best.distinct()
+        return best
     }
 
     private companion object {
         const val MAX_NOVEL_CHAPTER_PAGES = 1000
+        const val MAX_NOVEL_TEXT_PAGES = 100
     }
 }

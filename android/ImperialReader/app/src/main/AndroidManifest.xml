@@ -5,9 +5,10 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
     <application
         android:name=".App"
@@ -27,6 +28,7 @@
         </activity>
 
         <activity android:name=".ui.details.MangaDetailsActivity" android:exported="false"/>
+        <activity android:name=".ui.details.MigrationSourceSelectionActivity" android:exported="false"/>
         <activity android:name=".ui.browse.SourceBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.BookBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.LocalEntriesActivity" android:exported="false"/>
@@ -44,5 +46,20 @@
             android:name=".data.download.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync"/>
+
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge"/>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/app_update_paths"/>
+        </provider>
     </application>
 </manifest>

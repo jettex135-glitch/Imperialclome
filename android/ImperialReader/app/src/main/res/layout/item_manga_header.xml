@@ -7,7 +7,7 @@
         android:orientation="horizontal">
         <com.google.android.material.card.MaterialCardView
             android:layout_width="110dp" android:layout_height="165dp"
-            app:cardCornerRadius="8dp" app:cardElevation="0dp" app:cardBackgroundColor="@color/card">
+            app:cardCornerRadius="12dp" app:cardElevation="0dp" app:cardBackgroundColor="@color/card">
             <ImageView android:id="@+id/hCover"
                 android:layout_width="match_parent" android:layout_height="match_parent"
                 android:scaleType="centerCrop" android:contentDescription="cover"/>

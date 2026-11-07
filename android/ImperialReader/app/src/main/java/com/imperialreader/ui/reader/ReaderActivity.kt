@@ -1,33 +1,27 @@
 package com.imperialreader.ui.reader
 
-import android.Manifest
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.Build
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.provider.MediaStore
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -44,24 +38,12 @@ import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.IOException
 import kotlin.math.abs
 
-class ReaderActivity : AppCompatActivity() {
-
-    private data class PendingImageSave(val page: Int, val bitmap: Bitmap)
-
-    private var pendingImageSave: PendingImageSave? = null
-    private val storagePermissionRequest = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val pending = pendingImageSave
-        pendingImageSave = null
-        if (granted && pending != null) savePageToGallery(pending.page, pending.bitmap)
-        else if (!granted) toast("Storage permission is required to save a page")
-    }
+class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -82,10 +64,12 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var title: TextView
     private lateinit var subtitle: TextView
     private lateinit var btnMode: MaterialButton
+    private lateinit var btnEpisodeAudio: MaterialButton
     private lateinit var nextChapterPrompt: LinearLayout
     private lateinit var nextChapterStar: StarSpriteView
     private lateinit var nextChapterMessage: TextView
     private lateinit var gesture: GestureDetector
+    private var pageAdapter: PageAdapter? = null
 
     private var manga: MangaEntity? = null
     private var chapters: List<ChapterEntity> = emptyList() // oldest → newest
@@ -94,11 +78,26 @@ class ReaderActivity : AppCompatActivity() {
     private var pages: List<String> = emptyList()
     private var headers: Map<String, String> = emptyMap()
     private var currentPage = 0
+    private var pageZoomed = false
+    private var episodeAudioUrl: String? = null
+    private var audioPlayer: MediaPlayer? = null
+    private var audioPrepared = false
     private var mode = AppPrefs.READER_RTL
     private var overlaysVisible = false
     private var restoring = false
     private var chapterTransitionActive = false
     private var loadJob: Job? = null
+    private var pendingSaveBitmap: android.graphics.Bitmap? = null
+    private val requestGalleryPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val bitmap = pendingSaveBitmap
+            pendingSaveBitmap = null
+            if (granted && bitmap != null) savePageBitmap(bitmap)
+            else if (!granted) {
+                bitmap?.recycle()
+                toast("Storage permission is needed to save pages")
+            }
+        }
 
     private val pagerMode get() = mode != AppPrefs.READER_VERTICAL
     private val rtl get() = mode == AppPrefs.READER_RTL
@@ -121,6 +120,7 @@ class ReaderActivity : AppCompatActivity() {
         title = findViewById(R.id.readerTitle)
         subtitle = findViewById(R.id.readerSubtitle)
         btnMode = findViewById(R.id.btnMode)
+        btnEpisodeAudio = findViewById(R.id.btnEpisodeAudio)
         nextChapterPrompt = findViewById(R.id.nextChapterPrompt)
         nextChapterStar = findViewById(R.id.nextChapterStar)
         nextChapterMessage = findViewById(R.id.nextChapterMessage)
@@ -145,6 +145,7 @@ class ReaderActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnPrevCh).setOnClickListener { openAdjacent(-1) }
         findViewById<ImageButton>(R.id.btnNextCh).setOnClickListener { openAdjacent(1) }
         btnMode.setOnClickListener { showModeDialog() }
+        btnEpisodeAudio.setOnClickListener { toggleEpisodeAudio() }
         nextChapterPrompt.setOnClickListener { openAdjacent(1) }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -158,7 +159,9 @@ class ReaderActivity : AppCompatActivity() {
 
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                if (pagerMode) onPageChanged(position)
+                if (pagerMode) {
+                    onPageChanged(position)
+                }
             }
         })
         webtoon.addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -171,25 +174,26 @@ class ReaderActivity : AppCompatActivity() {
                 updateNextChapterPrompt()
             }
         })
-        var pulledNextChapter = false
+        var pulledChapter = false
         val webtoonPullGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (e1 == null || e2.rawY >= e1.rawY || webtoon.canScrollVertically(1) ||
-                    index >= chapters.lastIndex || pages.isEmpty()
-                ) return false
+                if (e1 == null || pages.isEmpty() || pageZoomed) return false
+                val towardNext = e2.rawY < e1.rawY && !webtoon.canScrollVertically(1) && hasAdjacentChapter(1)
+                val towardPrevious = e2.rawY > e1.rawY && !webtoon.canScrollVertically(-1) && index > 0
+                if (!towardNext && !towardPrevious) return false
                 webtoon.stopScroll()
-                pulledNextChapter = true
-                openAdjacent(1)
+                pulledChapter = true
+                openAdjacent(if (towardNext) 1 else -1)
                 return true
             }
         })
         webtoon.setOnTouchListener { _, event ->
             webtoonPullGesture.onTouchEvent(event)
-            val consume = event.actionMasked == MotionEvent.ACTION_UP && pulledNextChapter
+            val consume = event.actionMasked == MotionEvent.ACTION_UP && pulledChapter
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                pulledNextChapter = false
+                pulledChapter = false
             }
             consume
         }
@@ -203,7 +207,7 @@ class ReaderActivity : AppCompatActivity() {
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (!pagerMode || pages.isEmpty() || e1 == null || !isInside(pager, e1)) return false
+                if (!pagerMode || pageZoomed || pages.isEmpty() || e1 == null || !isInside(pager, e1)) return false
                 if (overlaysVisible && (isInside(topBar, e1) || isInside(bottomBar, e1))) return false
                 val dx = e2.rawX - e1.rawX
                 val dy = e2.rawY - e1.rawY
@@ -219,6 +223,7 @@ class ReaderActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ loading
 
     private fun loadChapter(chapterId: Long, startPage: Int?) {
+        setEpisodeAudio(null)
         currentChapterId = chapterId
         loadJob?.cancel()
         loadJob = lifecycleScope.launch {
@@ -249,6 +254,7 @@ class ReaderActivity : AppCompatActivity() {
                     is LoadedChapter.Images -> {
                         pages = loaded.pages
                         headers = loaded.headers
+                        setEpisodeAudio(loaded.audioUrl)
                     }
                 }
                 app.repo.recordHistory(current.id)
@@ -293,8 +299,23 @@ class ReaderActivity : AppCompatActivity() {
         progressBar.visibility = View.GONE
         errorView.visibility = View.GONE
         restoring = true
-        val adapter = PageAdapter(headers, webtoon = !pagerMode, onSavePage = ::confirmSavePage)
+        val adapter = PageAdapter(headers, webtoon = !pagerMode, onSavePage = { image, pageUrl ->
+            if (image.drawable == null) toast("Wait for the page to finish loading before saving it")
+            else lifecycleScope.launch {
+                try {
+                    confirmSavePage(GalleryPageSaver.loadPageBitmap(this@ReaderActivity, pageUrl, headers))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    toast("Could not load the selected page: ${e.message}")
+                }
+            }
+        }, onZoomChanged = { position, zoomed ->
+            if (position == currentPage) pageZoomed = zoomed
+        })
         adapter.pages = pages
+        adapter.setActivePage(start)
+        pageAdapter = adapter
 
         if (pagerMode) {
             webtoon.visibility = View.GONE
@@ -323,10 +344,49 @@ class ReaderActivity : AppCompatActivity() {
         root.postDelayed({ restoring = false }, 500)
     }
 
+    private fun savePageBitmap(bitmap: android.graphics.Bitmap) {
+        lifecycleScope.launch {
+            try {
+                GalleryPageSaver.save(this@ReaderActivity, bitmap)
+                toast("Page saved to Pictures/ImperialReader")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Couldn't save page: ${e.message}")
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    }
+
+    private fun confirmSavePage(bitmap: android.graphics.Bitmap) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Save page to gallery?")
+            .setMessage("Save this page to Pictures/ImperialReader?")
+            .setNegativeButton("Cancel") { _, _ -> bitmap.recycle() }
+            .setOnCancelListener { bitmap.recycle() }
+            .setPositiveButton("Save") { _, _ ->
+                if (GalleryPageSaver.hasLegacyPermission(this)) savePageBitmap(bitmap)
+                else {
+                    pendingSaveBitmap?.recycle()
+                    pendingSaveBitmap = bitmap
+                    requestGalleryPermission.launch(GalleryPageSaver.WRITE_PERMISSION)
+                }
+            }
+            .show()
+    }
+
     // ------------------------------------------------------------------ paging
 
     private fun onPageChanged(position: Int) {
         if (position < 0 || position >= pages.size) return
+        pageAdapter?.setActivePage(position)
+        if (position != currentPage) {
+            pageZoomed = false
+            val adapter = if (pagerMode) pager.adapter as? PageAdapter else webtoon.adapter as? PageAdapter
+            adapter?.resetZoom(currentPage)
+        }
+
         currentPage = position
         updatePageUi(position)
         if (restoring) return
@@ -338,8 +398,18 @@ class ReaderActivity : AppCompatActivity() {
         lifecycleScope.launch { app.db.chapterDao().saveProgress(ch.id, position, read) }
     }
 
+    override fun onPause() {
+        pageAdapter?.pausePawchiveVideo()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pageAdapter?.resumePawchiveVideo()
+    }
+
     private fun updateNextChapterPrompt() {
-        val show = !pagerMode && pages.isNotEmpty() && index < chapters.lastIndex &&
+        val show = !pagerMode && pages.isNotEmpty() && hasAdjacentChapter(1) &&
             !webtoon.canScrollVertically(1) && errorView.visibility != View.VISIBLE
         if (show) {
             nextChapterPrompt.visibility = View.VISIBLE
@@ -378,8 +448,15 @@ class ReaderActivity : AppCompatActivity() {
     }
 
     private fun openAdjacent(delta: Int) {
-        val target = index + delta
-        if (target !in chapters.indices) {
+        val navigationTarget = if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) {
+            ChapterNavigation.next(chapters, index)
+        } else {
+            null
+        }
+        val target = navigationTarget?.index
+            ?: if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) null
+            else (index + delta).takeIf { it in chapters.indices }
+        if (target == null) {
             toast(if (delta > 0) "No next chapter" else "No previous chapter")
             return
         }
@@ -393,71 +470,27 @@ class ReaderActivity : AppCompatActivity() {
             hideNextChapterPrompt()
         }, 500)
         if (!pagerMode) webtoon.stopScroll()
-        loadChapter(chapters[target].id, if (delta < 0) Int.MAX_VALUE else 0)
-    }
-
-    private fun confirmSavePage(page: Int, bitmap: Bitmap) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Save page ${page + 1} to your gallery?")
-            .setPositiveButton("Save") { _, _ ->
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
-                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    pendingImageSave = PendingImageSave(page, bitmap)
-                    storagePermissionRequest.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                } else {
-                    savePageToGallery(page, bitmap)
+        val targetChapterId = chapters[target].id
+        val skippedIds = navigationTarget?.skippedChapterIds.orEmpty()
+        if (skippedIds.isEmpty()) {
+            loadChapter(targetChapterId, if (delta < 0) Int.MAX_VALUE else 0)
+        } else {
+            lifecycleScope.launch {
+                skippedIds.toList().chunked(400).forEach { app.db.chapterDao().setRead(it, true) }
+                chapters = chapters.map { chapter ->
+                    if (chapter.id in skippedIds) chapter.copy(read = true) else chapter
                 }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun savePageToGallery(page: Int, bitmap: Bitmap) {
-        lifecycleScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val titlePart = (manga?.title ?: "ImperialReader")
-                        .replace(Regex("[^A-Za-z0-9._-]+"), "_")
-                        .trim('_')
-                        .take(80)
-                        .ifBlank { "ImperialReader" }
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, "${titlePart}_chapter${index + 1}_page${page + 1}.png")
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Imperial Reader")
-                            put(MediaStore.MediaColumns.IS_PENDING, 1)
-                        }
-                    }
-                    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                        ?: throw IOException("Could not create a gallery image")
-                    try {
-                        val output = contentResolver.openOutputStream(uri) ?: throw IOException("Could not write the gallery image")
-                        output.use {
-                            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) {
-                                throw IOException("Could not encode the page image")
-                            }
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-                            if (contentResolver.update(uri, ready, null, null) <= 0) {
-                                throw IOException("Could not finish saving the gallery image")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        contentResolver.delete(uri, null, null)
-                        throw e
-                    }
-                }
-                toast("Page ${page + 1} saved to Pictures")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                toast("Could not save page: ${e.message}")
+                loadChapter(targetChapterId, 0)
             }
         }
     }
+
+    private fun hasAdjacentChapter(delta: Int): Boolean =
+        if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) {
+            ChapterNavigation.next(chapters, index) != null
+        } else {
+            index + delta in chapters.indices
+        }
 
     // ------------------------------------------------------------------ input
 
@@ -530,6 +563,99 @@ class ReaderActivity : AppCompatActivity() {
         AppPrefs.READER_LTR -> "Left to right"
         AppPrefs.READER_VERTICAL -> "Vertical (webtoon)"
         else -> "Right to left"
+    }
+
+    private fun setEpisodeAudio(url: String?) {
+        releaseEpisodeAudio()
+        episodeAudioUrl = url
+        btnEpisodeAudio.visibility = if (url == null) View.GONE else View.VISIBLE
+        btnEpisodeAudio.text = "♫ Play episode audio"
+    }
+
+    private fun toggleEpisodeAudio() {
+        val url = episodeAudioUrl ?: return
+        val player = audioPlayer
+        if (player != null) {
+            if (!audioPrepared) return
+            if (player.isPlaying) {
+                player.pause()
+                btnEpisodeAudio.text = "♫ Play episode audio"
+            } else {
+                player.start()
+                btnEpisodeAudio.text = "♫ Pause episode audio"
+            }
+            return
+        }
+
+        val newPlayer = MediaPlayer()
+        audioPlayer = newPlayer
+        try {
+            newPlayer.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            newPlayer.setDataSource(
+                this,
+                Uri.parse(url),
+                mapOf(
+                    "Referer" to "https://m.webtoons.com/",
+                    "User-Agent" to app.network.userAgent
+                )
+            )
+            newPlayer.setOnPreparedListener { prepared ->
+                if (audioPlayer === prepared && !isFinishing) {
+                    audioPrepared = true
+                    prepared.start()
+                    btnEpisodeAudio.text = "♫ Pause episode audio"
+                }
+            }
+            newPlayer.setOnCompletionListener { completed ->
+                if (audioPlayer === completed) {
+                    releaseEpisodeAudio()
+                    btnEpisodeAudio.text = "♫ Play episode audio"
+                }
+            }
+            newPlayer.setOnErrorListener { failed, _, _ ->
+                if (audioPlayer === failed) {
+                    releaseEpisodeAudio()
+                    btnEpisodeAudio.text = "♫ Play episode audio"
+                    toast("Could not play this episode's audio")
+                }
+                true
+            }
+            btnEpisodeAudio.text = "Loading episode audio…"
+            newPlayer.prepareAsync()
+        } catch (e: Exception) {
+            releaseEpisodeAudio()
+            btnEpisodeAudio.text = "♫ Play episode audio"
+            toast("Could not play this episode's audio: ${e.message}")
+        }
+    }
+
+    private fun releaseEpisodeAudio() {
+        audioPlayer?.let { player ->
+            runCatching { player.stop() }
+            player.release()
+        }
+        audioPlayer = null
+        audioPrepared = false
+    }
+
+    override fun onStop() {
+        audioPlayer?.let { player ->
+            if (audioPrepared && player.isPlaying) {
+                player.pause()
+                btnEpisodeAudio.text = "♫ Play episode audio"
+            }
+        }
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        releaseEpisodeAudio()
+        super.onDestroy()
     }
 
     private fun showModeDialog() {

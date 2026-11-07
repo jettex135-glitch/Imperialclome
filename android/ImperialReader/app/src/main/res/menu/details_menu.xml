@@ -4,6 +4,9 @@
     <item android:id="@+id/action_download" android:icon="@drawable/ic_download" android:title="Download" app:showAsAction="ifRoom"/>
     <item android:id="@+id/action_sort" android:icon="@drawable/ic_sort" android:title="Reverse order" app:showAsAction="ifRoom"/>
     <item android:id="@+id/action_refresh" android:title="Refresh" app:showAsAction="never"/>
+    <item android:id="@+id/action_custom_cover" android:title="Choose custom cover" app:showAsAction="never"/>
+    <item android:id="@+id/action_reset_custom_cover" android:title="Reset custom cover" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_migrate" android:title="Migrate to another source" app:showAsAction="never"/>
     <item android:id="@+id/action_mark_all_read" android:title="Mark all as read" app:showAsAction="never"/>
     <item android:id="@+id/action_mark_all_unread" android:title="Mark all as unread" app:showAsAction="never"/>
     <item android:id="@+id/action_delete_downloads" android:title="Delete all downloads" app:showAsAction="never"/>
@@ -11,5 +14,6 @@
     <item android:id="@+id/action_select_all_chapters" android:title="Select all chapters" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_mark_selected_read" android:title="Mark selected as read" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_mark_selected_unread" android:title="Mark selected as unread" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_delete_selected_downloads" android:title="Delete selected downloads" android:visible="false" app:showAsAction="never"/>
     <item android:id="@+id/action_cancel_chapter_selection" android:title="Cancel selection" android:visible="false" app:showAsAction="never"/>
 </menu>

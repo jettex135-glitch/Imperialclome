@@ -24,7 +24,8 @@ class LocalScanner(private val ctx: Context) {
         fun isArchive(name: String?): Boolean {
             val n = name?.lowercase() ?: return false
             return n.endsWith(".cbz") || n.endsWith(".zip") || n.endsWith(".epub") ||
-                n.endsWith(".cbr") || n.endsWith(".rar") || n.endsWith(".pdf")
+                n.endsWith(".cbr") || n.endsWith(".rar") || n.endsWith(".pdf") ||
+                n.endsWith(".psd") || n.endsWith(".psb") || n.endsWith(".clip")
         }
     }
 
@@ -54,7 +55,7 @@ class LocalScanner(private val ctx: Context) {
             }
 
             val coverDoc = children.firstOrNull {
-                !it.isDirectory && it.name?.matches(Regex("(?i)cover\\.(jpe?g|png|webp)")) == true
+                !it.isDirectory && it.name?.matches(Regex("(?i)cover\\.(jpe?g|png|webp|psd|psb|clip)")) == true
             }
             val cover = resolveCover(folderName, coverDoc, chapterDocs.first())
 
@@ -85,7 +86,8 @@ class LocalScanner(private val ctx: Context) {
         count
     }
 
-    private fun hasImages(dir: DocumentFile): Boolean = dir.listFiles().any { !it.isDirectory && isImageName(it.name) }
+    private fun hasImages(dir: DocumentFile): Boolean =
+        dir.listFiles().any { !it.isDirectory && (isImageName(it.name) || LocalArtworkPreview.supports(it.name)) }
 
     /**
      * Local cover for an entry: cover.jpg/png in the folder wins, otherwise the first page of the first
@@ -96,17 +98,21 @@ class LocalScanner(private val ctx: Context) {
         val extract = ctx.app.prefs.localCovers
         if (coverDoc == null && !extract) return null
         val signatureDoc: DocumentFile = coverDoc ?: if (first.isDirectory) {
-            first.listFiles().filter { isImageName(it.name) }
+            first.listFiles()
+                .filter { isImageName(it.name) || LocalArtworkPreview.supports(it.name) }
                 .minWithOrNull(compareBy(NaturalOrder) { it.name ?: "" }) ?: return null
         } else first
 
         val dir = File(ctx.filesDir, "covers").apply { mkdirs() }
         val prefix = "${folderName.hashCode()}_"
-        val target = File(dir, "$prefix${signatureDoc.lastModified()}_${signatureDoc.length()}.jpg")
+        val extension = if (LocalArtworkPreview.supports(signatureDoc.name)) "png" else "jpg"
+        val target = File(dir, "$prefix${signatureDoc.lastModified()}_${signatureDoc.length()}.$extension")
         if (target.exists() && target.length() > 0) return android.net.Uri.fromFile(target).toString()
 
         val ok = try {
             when {
+                LocalArtworkPreview.supports(signatureDoc.name) ->
+                    LocalArtworkPreview.extract(ctx, signatureDoc, target)
                 coverDoc != null || first.isDirectory ->
                     ctx.contentResolver.openInputStream(signatureDoc.uri)?.use { i -> target.outputStream().use { i.copyTo(it) } } != null
                 first.name.orEmpty().lowercase().endsWith(".epub") -> extractEpubCover(first, target)

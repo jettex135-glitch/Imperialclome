@@ -23,26 +23,27 @@ class StarSpriteView @JvmOverloads constructor(
         visibility = View.GONE
     }
 
-    fun start() {
+    fun start(speed: Float = 1f) {
         visibility = View.VISIBLE
         if (animator?.isRunning == true) return
+        val durationScale = speed.coerceIn(0.5f, 2f)
         val spin = ObjectAnimator.ofFloat(this, ROTATION, 0f, 360f).apply {
-            duration = 1400
+            duration = (1400 / durationScale).toLong()
             repeatCount = ObjectAnimator.INFINITE
             interpolator = LinearInterpolator()
         }
         val bounce = ObjectAnimator.ofFloat(this, TRANSLATION_Y, 0f, -14f).apply {
-            duration = 500
+            duration = (500 / durationScale).toLong()
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
         }
         val pulseX = ObjectAnimator.ofFloat(this, SCALE_X, 1f, 1.25f).apply {
-            duration = 500
+            duration = (500 / durationScale).toLong()
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
         }
         val pulseY = ObjectAnimator.ofFloat(this, SCALE_Y, 1f, 1.25f).apply {
-            duration = 500
+            duration = (500 / durationScale).toLong()
             repeatCount = ObjectAnimator.INFINITE
             repeatMode = ObjectAnimator.REVERSE
         }

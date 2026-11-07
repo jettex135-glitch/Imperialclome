@@ -10,7 +10,6 @@ import androidx.annotation.DrawableRes
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
 import com.imperialreader.R
 
 data class RowItem(
@@ -46,7 +45,7 @@ class RowAdapter(
         val item = getItem(position)
         holder.title.text = item.title
         holder.sub.text = item.subtitle
-        holder.cover.load(item.cover) { item.headers.forEach { (k, v) -> addHeader(k, v) } }
+        holder.cover.loadCover(item.cover, item.headers)
         holder.itemView.alpha = if (item.dim) 0.5f else 1f
         holder.action.setImageResource(actionIcon)
         holder.action.visibility = if (item.showAction) View.VISIBLE else View.INVISIBLE

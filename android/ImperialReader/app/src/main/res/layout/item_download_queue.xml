@@ -1,20 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="wrap_content"
-    android:orientation="vertical" android:paddingStart="16dp" android:paddingEnd="16dp"
+    android:orientation="horizontal" android:gravity="center_vertical"
+    android:paddingStart="16dp" android:paddingEnd="8dp"
     android:paddingTop="8dp" android:paddingBottom="8dp"
     android:background="?attr/selectableItemBackground">
-    <TextView android:id="@+id/queueTitle"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:maxLines="1" android:ellipsize="end"
-        android:textColor="@color/on_surface" android:textSize="14sp" android:textStyle="bold"/>
-    <TextView android:id="@+id/queueDetail"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="2dp" android:maxLines="1" android:ellipsize="end"
-        android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
-    <ProgressBar android:id="@+id/queueProgress"
-        style="?android:attr/progressBarStyleHorizontal"
-        android:layout_width="match_parent" android:layout_height="4dp"
-        android:layout_marginTop="8dp" android:max="100"
-        android:visibility="gone"/>
+    <ImageView android:id="@+id/queueIcon"
+        android:layout_width="28dp" android:layout_height="28dp"
+        android:layout_marginEnd="12dp" android:visibility="gone"
+        android:contentDescription=""/>
+    <LinearLayout
+        android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_weight="1" android:orientation="vertical">
+        <TextView android:id="@+id/queueTitle"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:maxLines="1" android:ellipsize="end"
+            android:textColor="@color/on_surface" android:textSize="14sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/queueDetail"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="2dp" android:maxLines="1" android:ellipsize="end"
+            android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+        <ProgressBar android:id="@+id/queueProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent" android:layout_height="4dp"
+            android:layout_marginTop="8dp" android:max="100"
+            android:visibility="gone"/>
+    </LinearLayout>
+    <ImageButton android:id="@+id/queueActions"
+        android:layout_width="40dp" android:layout_height="40dp"
+        android:layout_marginStart="4dp"
+        android:src="@drawable/ic_more_horiz"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Download options"/>
 </LinearLayout>

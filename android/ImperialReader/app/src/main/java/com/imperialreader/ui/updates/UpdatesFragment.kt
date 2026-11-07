@@ -13,6 +13,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.imperialreader.R
 import com.imperialreader.data.db.UpdateItem
+import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.ui.common.RowAdapter
 import com.imperialreader.ui.common.RowItem
 import com.imperialreader.ui.common.StarSpriteView
@@ -76,7 +77,7 @@ class UpdatesFragment : Fragment(R.layout.fragment_updates) {
                             title = u.mangaTitle,
                             subtitle = u.chapter.name + " • " + relativeTime(u.chapter.dateFetch),
                             cover = u.mangaCover,
-                            dim = u.chapter.read,
+                            dim = u.chapter.read || u.chapter.updateSeen,
                             showAction = !u.chapter.downloaded,
                             headers = app.sources.get(u.mangaSource)?.imageHeaders() ?: emptyMap(),
                             tag = u
@@ -91,15 +92,19 @@ class UpdatesFragment : Fragment(R.layout.fragment_updates) {
     private fun refresh(swipe: SwipeRefreshLayout) {
         viewLifecycleOwner.lifecycleScope.launch {
             swipe.isRefreshing = true
-            sprite.start()
+            sprite.start(speed = 1.5f)
+            LibraryRefreshNotification.show(requireContext(), 0, 0)
             try {
-                val n = requireContext().app.repo.updateLibrary()
+                val n = requireContext().app.repo.updateLibrary(onProgress = { done, total ->
+                    LibraryRefreshNotification.show(requireContext(), done, total)
+                })
                 requireContext().toast(if (n > 0) "$n new chapter(s)" else "No new chapters")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 requireContext().toast("Update failed: ${e.message}")
             } finally {
+                LibraryRefreshNotification.clear(requireContext())
                 sprite.stop()
                 swipe.isRefreshing = false
             }

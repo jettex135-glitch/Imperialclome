@@ -19,10 +19,12 @@ open class MadaraSource(
     override val name: String,
     override val baseUrl: String,
     override val lang: String = "en",
-    private val mangaPath: String = "manga"
+    private val mangaPath: String = "manga",
+    idOverride: String? = null,
+    override val nsfw: Boolean = false
 ) : HttpSource() {
 
-    override val id: String =
+    override val id: String = idOverride ?:
         "madara_" + (runCatching { URI(baseUrl).host }.getOrNull() ?: name).lowercase().replace(Regex("[^a-z0-9]"), "_")
 
     private val itemSelector = "div.page-item-detail, div.c-tabs-item__content"
@@ -74,7 +76,8 @@ open class MadaraSource(
         manga.artist = doc.select(".artist-content a").joinToString(", ") { it.text() }.ifBlank { null }
         manga.description = doc.selectFirst("div.description-summary div.summary__content, div.summary_content div.post-content_item > div.summary-content, .manga-excerpt")
             ?.text()?.trim()?.ifBlank { null }
-        manga.genre = doc.select("div.genres-content a").joinToString(", ") { it.text() }.ifBlank { null }
+        manga.genre = (doc.select("div.genres-content a").map { it.text().trim() } + extractGenreTags(doc))
+            .distinct().joinToString(", ").ifBlank { manga.genre }
         manga.thumbnailUrl = imageOf(doc.selectFirst("div.summary_image img")) ?: manga.thumbnailUrl
         val statusText = doc.select("div.post-content_item").firstOrNull {
             it.selectFirst("h5, .summary-heading")?.text()?.contains("Status", true) == true
